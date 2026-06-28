@@ -10,6 +10,7 @@ export interface AiTab {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  extractedAt?: string;
 }
 
 export interface ChatContent {

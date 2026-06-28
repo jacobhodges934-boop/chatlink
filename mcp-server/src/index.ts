@@ -97,8 +97,14 @@ function registerTools(server: McpServer) {
         .describe(
           "If true, return a brief summary instead of the full transcript. Useful for large chats."
         ),
+      afterTimestamp: z
+        .number()
+        .optional()
+        .describe(
+          "If provided, only return messages whose extractedAt is after this Unix timestamp (ms). Use this to get only new messages since a previous call."
+        ),
     },
-    async ({ tabId, maxMessages, summaryOnly }) => {
+    async ({ tabId, maxMessages, summaryOnly, afterTimestamp }) => {
       if (!bridge.isConnected()) {
         return {
           content: [
@@ -113,7 +119,17 @@ function registerTools(server: McpServer) {
 
       try {
         const chat = await bridge.getChat(tabId);
-        const messages = chat.messages.slice(-(maxMessages ?? 50));
+        let messages = chat.messages.slice(-(maxMessages ?? 50));
+
+        // Filter by timestamp if requested
+        if (afterTimestamp && afterTimestamp > 0) {
+          messages = messages.filter((m: any) => {
+            const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
+            return ts > afterTimestamp;
+          });
+        }
+
+        const status = afterTimestamp && messages.length === 0 ? "empty" : "complete";
 
         if (messages.length === 0) {
           return {
@@ -416,6 +432,86 @@ function registerTools(server: McpServer) {
           content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
           isError: true,
         };
+      }
+    }
+  );
+
+  // ── delegate_coding_task ──────────────────────────────────────────────────
+  server.tool(
+    "delegate_coding_task",
+    "Send a coding task to an AI chat, wait for complete response, return only the new assistant reply. Combines find-tab + send + poll + read into one call.",
+    {
+      platform: z.enum(["chatgpt","gemini","claude","deepseek","grok"]).describe("AI platform to target"),
+      task: z.string().min(1).describe("The coding task. Be specific about files and expected output."),
+      tabId: z.number().optional().describe("Specific tab ID. Omit to auto-select by platform."),
+      context: z.string().optional().describe("Optional context: file contents, error logs, git diff."),
+      timeout: z.number().optional().default(120).describe("Max seconds to wait for response."),
+    },
+    async ({ platform, task, tabId, context, timeout }) => {
+      if (!bridge.isConnected()) {
+        return { content: [{ type: "text", text: "ChatLink extension not connected." }], isError: true };
+      }
+      try {
+        const tabs = await bridge.listAiTabs();
+        const target = tabId
+          ? tabs.find(t => t.tabId === tabId)
+          : tabs.find(t => (t.platform || "").toLowerCase() === platform);
+        if (!target || !target.tabId) {
+          return { content: [{ type: "text", text: "No " + platform + " tab found. Open it in Chrome first." }], isError: true };
+        }
+
+        // Build prompt with optional context
+        let prompt = task;
+        if (context) {
+          prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
+        }
+
+        // Send via dispatch mode
+        const beforeTs = Date.now();
+        const sendResult = await bridge.sendChatMessage(prompt, target.tabId, platform, "dispatch");
+        if (!sendResult.success) {
+          return { content: [{ type: "text", text: "Failed to send message." }], isError: true };
+        }
+
+        // Poll for new assistant messages until response stabilizes
+        const deadline = Date.now() + (timeout * 1000);
+        let lastText = "";
+        while (Date.now() < deadline) {
+          const chat = await bridge.getChat(target.tabId);
+          const newMsgs = chat.messages.filter((m) => {
+            const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
+            return ts > beforeTs && m.role === "assistant";
+          });
+          if (newMsgs.length > 0) {
+            const combined = newMsgs.map((m) => m.content).join("\n\n");
+            if (combined.length > 20) {
+              lastText = combined;
+              // Wait for response to stabilize
+              await new Promise((r) => setTimeout(r, 3000));
+              const recheck = await bridge.getChat(target.tabId);
+              const recheckMsgs = recheck.messages.filter((m) => {
+                const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
+                return ts > beforeTs && m.role === "assistant";
+              });
+              const recheckText = recheckMsgs.map((m) => m.content).join("\n\n");
+              if (recheckText === combined) {
+                return {
+                  content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }],
+                };
+              }
+              lastText = recheckText;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+
+        // Timeout with partial content
+        if (lastText) {
+          return { content: [{ type: "text", text: "## Partial response (timeout)\n\n---\n\n" + lastText }] };
+        }
+        return { content: [{ type: "text", text: "Timeout: no response within " + timeout + "s." }], isError: true };
+      } catch (err) {
+        return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
       }
     }
   );
