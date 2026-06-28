@@ -466,42 +466,43 @@ function registerTools(server: McpServer) {
         }
 
         let targetTab = candidates[0];
-        let lastContent = "";
-        let sendOk = false;
+        let beforeCount = 0;
         for (const t of candidates.slice(0, 5)) {
           try {
             const chat = await bridge.getChat(t.tabId);
-            const assists = chat.messages.filter((m: any) => m.role === "assistant");
-            lastContent = assists.length > 0 ? (assists[assists.length - 1].content || "") : "";
+            beforeCount = chat.messages.filter((m: any) => m.role === "assistant").length;
             const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
-            if (r.success) { targetTab = t; sendOk = true; break; }
+            if (r.success) { targetTab = t; break; }
           } catch { continue; }
         }
-        if (!sendOk) {
+        if (beforeCount < 0) {
           return { content: [{ type: "text", text: "Failed to send to any " + platform + " tab." }], isError: true };
         }
 
-        // Poll until a new assistant message appears with different content
+        // Poll until assistant message count increases (stable detection)
         const deadline = Date.now() + (timeout! * 1000);
         let bestText = "";
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 4000));
           try {
             const chat = await bridge.getChat(targetTab.tabId);
-            const assists = chat.messages.filter((m: any) => m.role === "assistant");
-            if (assists.length === 0) continue;
-            const latest = assists[assists.length - 1].content || "";
-            if (latest.length > 10 && latest !== lastContent) {
-              // New message found, wait for stabilization
-              const curLen = latest.length;
+            const assistCount = chat.messages.filter((m: any) => m.role === "assistant").length;
+            if (assistCount > beforeCount) {
+              const assists = chat.messages.filter((m: any) => m.role === "assistant");
+              const latest = assists[assists.length - 1].content || "";
+              const totalCount = chat.messages.length;
+              // Check stabilization
               await new Promise((r) => setTimeout(r, 4000));
               const recheck = await bridge.getChat(targetTab.tabId);
               const ra = recheck.messages.filter((m: any) => m.role === "assistant");
-              const rlatest = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
-              if (rlatest.length === curLen) {
-                return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + rlatest }] };
+              if (ra.length === assistCount && recheck.messages.length === totalCount) {
+                const rlatest = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
+                if (rlatest.length > 10) {
+                  return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + rlatest }] };
+                }
               }
-              bestText = rlatest;
+              bestText = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
+              beforeCount = ra.length;
             }
           } catch { continue; }
         }
