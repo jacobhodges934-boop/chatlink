@@ -452,11 +452,12 @@ function registerTools(server: McpServer) {
         return { content: [{ type: "text", text: "ChatLink extension not connected." }], isError: true };
       }
       try {
+        // Find target tab (try all matching tabs, prefer ones that respond)
         const tabs = await bridge.listAiTabs();
-        const target = tabId
-          ? tabs.find(t => t.tabId === tabId)
-          : tabs.find(t => (t.platform || "").toLowerCase() === platform);
-        if (!target || !target.tabId) {
+        const candidates = tabId
+          ? tabs.filter(t => t.tabId === tabId)
+          : tabs.filter(t => (t.platform || "").toLowerCase() === platform);
+        if (candidates.length === 0) {
           return { content: [{ type: "text", text: "No " + platform + " tab found. Open it in Chrome first." }], isError: true };
         }
 
@@ -466,43 +467,51 @@ function registerTools(server: McpServer) {
           prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
         }
 
-        // Send via dispatch mode
-        const beforeTs = Date.now();
-        const sendResult = await bridge.sendChatMessage(prompt, target.tabId, platform, "dispatch");
+        // Count existing messages before sending
+        let targetTab = candidates[0];
+        let beforeCount = 0;
+        for (const t of candidates.slice(0, 3)) {
+          try {
+            const chat = await bridge.getChat(t.tabId);
+            beforeCount = chat.messages.filter((m: any) => m.role === "assistant").length;
+            targetTab = t;
+            break;
+          } catch { continue; }
+        }
+
+        // Send message
+        const sendResult = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "dispatch");
         if (!sendResult.success) {
           return { content: [{ type: "text", text: "Failed to send message." }], isError: true };
         }
 
         // Poll for new assistant messages until response stabilizes
-        const deadline = Date.now() + (timeout * 1000);
+        const deadline = Date.now() + (timeout! * 1000);
         let lastText = "";
         while (Date.now() < deadline) {
-          const chat = await bridge.getChat(target.tabId);
-          const newMsgs = chat.messages.filter((m) => {
-            const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
-            return ts > beforeTs && m.role === "assistant";
-          });
-          if (newMsgs.length > 0) {
-            const combined = newMsgs.map((m) => m.content).join("\n\n");
-            if (combined.length > 20) {
-              lastText = combined;
-              // Wait for response to stabilize
-              await new Promise((r) => setTimeout(r, 3000));
-              const recheck = await bridge.getChat(target.tabId);
-              const recheckMsgs = recheck.messages.filter((m) => {
-                const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
-                return ts > beforeTs && m.role === "assistant";
-              });
-              const recheckText = recheckMsgs.map((m) => m.content).join("\n\n");
-              if (recheckText === combined) {
-                return {
-                  content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }],
-                };
+          await new Promise((r) => setTimeout(r, 2500));
+          try {
+            const chat = await bridge.getChat(targetTab.tabId);
+            const allMsgs = chat.messages.filter((m: any) => m.role === "assistant");
+            const newMsgs = allMsgs.slice(beforeCount);
+            if (newMsgs.length > 0) {
+              const combined = newMsgs.map((m: any) => m.content).join("\n\n");
+              if (combined.length > 20) {
+                // Wait to check if response stabilized
+                const prevLen = combined.length;
+                await new Promise((r) => setTimeout(r, 3000));
+                const recheck = await bridge.getChat(targetTab.tabId);
+                const recheckNew = recheck.messages.filter((m: any) => m.role === "assistant").slice(beforeCount);
+                const recheckText = recheckNew.map((m: any) => m.content).join("\n\n");
+                if (recheckText.length === prevLen && recheckText.length > 0) {
+                  return {
+                    content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }],
+                  };
+                }
+                lastText = recheckText;
               }
-              lastText = recheckText;
             }
-          }
-          await new Promise((r) => setTimeout(r, 2000));
+          } catch { continue; }
         }
 
         // Timeout with partial content
