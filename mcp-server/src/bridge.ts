@@ -21,10 +21,18 @@ export class ExtensionBridge {
   private readonly token: string;
   private httpServer: ReturnType<typeof createHttpServer> | null = null;
   private closing = false;
+  private startResolve: (() => void) | null = null;
+  private _ready: Promise<void>;
 
   constructor() {
     this.token = randomBytes(32).toString("hex");
+    this._ready = new Promise<void>(resolve => { this.startResolve = resolve; });
     this.startServer(0);
+  }
+
+  /** Wait until bridge is listening (or already listening) */
+  async ensureStarted(): Promise<void> {
+    return this._ready;
   }
 
   private startServer(attempt: number) {
@@ -108,6 +116,7 @@ export class ExtensionBridge {
     httpServer.listen(BRIDGE_PORT, "127.0.0.1", () => {
       this.wss = wss;
       this.httpServer = httpServer;
+      this.startResolve?.();
       process.stderr.write(`ChatMCP bridge listening on port ${BRIDGE_PORT}.\n`);
     });
   }
