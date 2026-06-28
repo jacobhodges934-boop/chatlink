@@ -457,31 +457,60 @@ function registerTools(server: McpServer) {
         const tabs = await bridge.listAiTabs();
         const candidates = tabId
           ? tabs.filter(t => t.tabId === tabId)
-          : tabs.filter(t => (t.platform || "").toLowerCase() === platform);
+          : tabs
+              .filter(t => (t.platform || "").toLowerCase() === platform)
+              .sort((a, b) => Number(b.active) - Number(a.active));
         if (candidates.length === 0) {
           return { content: [{ type: "text", text: "No " + platform + " tab found." }], isError: true };
         }
-        let targetTab = candidates[0];
-        let sent = false;
-        for (const t of candidates.slice(0, 3)) {
-          try {
-            const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
-            if (r && r.success) { targetTab = t; sent = true; break; }
-          } catch(e) { return { content: [{ type: "text", text: "Send error: "+String(e) }], isError: true }; }
-        }
-        if (!sent) {
+        const targetTab = candidates[0];
+        const baseline = await bridge.getChat(targetTab.tabId);
+        const baselineCount = baseline.messages.length;
+        const baselineAssistant = [...baseline.messages].reverse().find(m => m.role === "assistant");
+        const baselineAssistantContent = baselineAssistant?.content ?? "";
+        let sent;
+        try {
+          sent = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "confirmed");
+        } catch(e) { return { content: [{ type: "text", text: "Send error: "+String(e) }], isError: true }; }
+        if (!sent?.success) {
           return { content: [{ type: "text", text: "Failed to send." }], isError: true };
         }
-        // Wait
-        await new Promise(r => setTimeout(r, Math.min((timeout! * 1000 * 0.7), 25000)));
-        // Diagnosis: dump raw chat data
-        try {
+
+        const deadline = Date.now() + Math.max(5, timeout ?? 120) * 1000;
+        let lastAssistant = "";
+        let lastChangedAt = Date.now();
+
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
           const chat = await bridge.getChat(targetTab.tabId);
-          const diag = JSON.stringify({ totalMsgs: chat.messages.length, sampleRoles: chat.messages.slice(-3).map(m=>m.role), sampleContent: chat.messages.slice(-1).map(m=>(m.content||'').slice(0,50)) });
-          return { content: [{ type: "text", text: "DIAGNOSIS: " + diag }] };
-        } catch(e) {
-          return { content: [{ type: "text", text: "getChat error: "+String(e) }], isError: true };
+          const newMessages = chat.messages.slice(baselineCount);
+          const newAssistantMessages = newMessages.filter(m => m.role === "assistant" && m.content.trim().length > 0);
+          let assistantText = newAssistantMessages.map(m => m.content.trim()).join("\n\n").trim();
+
+          if (!assistantText) {
+            const currentAssistant = [...chat.messages].reverse().find(m => m.role === "assistant");
+            if (currentAssistant && currentAssistant.content !== baselineAssistantContent) {
+              assistantText = currentAssistant.content.trim();
+            }
+          }
+
+          if (!assistantText) continue;
+
+          if (assistantText !== lastAssistant) {
+            lastAssistant = assistantText;
+            lastChangedAt = Date.now();
+            continue;
+          }
+
+          if (Date.now() - lastChangedAt >= 6000) {
+            return { content: [{ type: "text", text: lastAssistant }] };
+          }
         }
+
+        return {
+          content: [{ type: "text", text: lastAssistant ? lastAssistant : "Timed out waiting for a new assistant reply." }],
+          isError: !lastAssistant,
+        };
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
       }
