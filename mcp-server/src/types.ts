@@ -20,6 +20,7 @@ export interface ChatContent {
   messages: ChatMessage[];
   extractedAt: string;
   isGenerating?: boolean;
+  errorState?: { detected: boolean; message?: string; element?: string };
 }
 
 export interface PageContent {
@@ -117,4 +118,4 @@ export type ExtensionMessage =
   | { type: "page_result"; requestId: string; content: PageContent }
   | { type: "artifacts_result"; requestId: string; content: ArtifactsContent }
   | { type: "error"; requestId: string; message: string; code?: ChatMcpErrorCode; stage?: string; retryable?: boolean; details?: unknown }
-  | { type: "send_message_result"; requestId: string; success: boolean; sent?: boolean; platform?: string; method?: string };
+  | { type: "send_message_result"; requestId: string; success: boolean; sent?: boolean; platform?: string; method?: string; confirmationSignal?: string };

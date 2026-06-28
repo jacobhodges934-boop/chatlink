@@ -405,13 +405,13 @@ export class ExtensionBridge {
     return result.content;
   }
 
-  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed"): Promise<{ success: boolean; platform?: string; method?: string }> {
+  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed"): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
     const operationId = randomBytes(16).toString("hex");
-    const result = await this.request<{ type: string; success: boolean; platform?: string; method?: string }>(
+    const result = await this.request<{ type: string; success: boolean; platform?: string; method?: string; confirmationSignal?: string }>(
       { type: "send_message", tabId, text, platform, operationId, confirmation },
       25000
     );
-    return { success: result.success, platform: result.platform, method: result.method };
+    return { success: result.success, platform: result.platform, method: result.method, confirmationSignal: result.confirmationSignal };
   }
 
   async close(reason = "ChatMCP bridge is shutting down"): Promise<void> {

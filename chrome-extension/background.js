@@ -273,7 +273,10 @@ async function handleGetContent(requestId, targetTabId, mode) {
     if (!tab?.id) { sendError(requestId, "background.get_content.find_tab", "Tab not found."); return; }
 
     async function extract() {
-      if (mode === "chat") return chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT" });
+      if (mode === "chat") {
+        const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractChatInline });
+        return injected?.[0]?.result;
+      }
       else {
         const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageInline });
         return injected?.[0]?.result;
@@ -281,11 +284,17 @@ async function handleGetContent(requestId, targetTabId, mode) {
     }
 
     let result = await extract().catch(() => null);
+    if (!result && mode === "chat") {
+      result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT" }).catch(() => null);
+    }
     if (!result && !tab.active) {
       await chrome.tabs.update(tab.id, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
       await sleep(600);
       result = await extract().catch(() => null);
+      if (!result && mode === "chat") {
+        result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT" }).catch(() => null);
+      }
     }
     if (!result) { sendError(requestId, "background.get_content.content_script", "No response from content script."); return; }
     if (result.error) { sendError(requestId, "background.get_content.content_script", result.error); return; }
@@ -296,7 +305,7 @@ async function handleGetContent(requestId, targetTabId, mode) {
     if (result.type === "page") {
       send({ type: "page_result", requestId, content: { tabId: tab.id, platform, url: result.url, title: result.title, text: result.text, extractedAt: result.extractedAt } });
     } else {
-      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating } });
+      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating, errorState: result.errorState } });
     }
   } catch (err) { sendError(requestId, "background.get_content", err); }
 }
@@ -326,6 +335,36 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
     if (result.error) { sendError(requestId, "background.get_artifacts.content_script", result.error); return; }
     send({ type: "artifacts_result", requestId, content: { tabId: tab.id, platform: "Claude", url: result.url, title: result.title, artifacts: result.artifacts, count: result.count, extractedAt: result.extractedAt, note: result.note ?? null } });
   } catch (err) { sendError(requestId, "background.get_artifacts", err); }
+}
+
+const injectionPromises = new Map();
+
+async function ensureContentScript(tabId) {
+  // Dedup: return existing injection promise for this tab
+  const existing = injectionPromises.get(tabId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    // Try existing content script first
+    let ready = await chrome.tabs.sendMessage(tabId, { type: "__CHATLINK_DIAGNOSTICS__" }).catch(() => null);
+    if (ready?.version) return ready;
+
+    // Not injected yet — force injection
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content-scripts/extractor.js"] });
+
+    // Poll until ready (up to 1s)
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      ready = await chrome.tabs.sendMessage(tabId, { type: "__CHATLINK_DIAGNOSTICS__" }).catch(() => null);
+      if (ready?.version) return ready;
+    }
+
+    throw new Error("Chat page content script did not become ready after injection.");
+  })();
+
+  injectionPromises.set(tabId, promise);
+  promise.finally(() => { injectionPromises.delete(tabId); });
+  return promise;
 }
 
 async function handleSendMessage(requestId, targetTabId, text, platform, operationId, confirmation) {
@@ -363,6 +402,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     // Serial queue per tab — no auto-focus (just send via content script)
     const result = await enqueueTabSend(tab.id, async () => {
       try {
+        await ensureContentScript(tab.id);
         return await chrome.tabs.sendMessage(tab.id, {
           type: "SEND_MESSAGE",
           text: text.trim(),
@@ -387,7 +427,14 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
       return;
     }
 
-    const r = { success: !!(result.ok || result.success), sent: !!(result.sent ?? result.ok ?? result.success), platform: result.platform||result.site, method: result.method };
+    const tabPlatform = PLATFORM_NAMES[parseHostname(tab.url)]?.toLowerCase();
+    const r = {
+      success: !!(result.ok || result.success),
+      sent: !!(result.sent ?? result.ok ?? result.success),
+      platform: result.platform || result.site || platform || tabPlatform || "unknown",
+      method: result.method,
+      confirmationSignal: result.confirmationSignal,
+    };
     if (operationId) setDedupResult(operationId, r);
     send({ type: "send_message_result", requestId, ...r });
   } catch (err) {
@@ -407,6 +454,208 @@ function extractPageInline() {
   for (const code of clone.querySelectorAll("code")) code.replaceWith("`" + code.textContent + "`");
   const text = (clone.textContent ?? "").replace(/\n{4,}/g, "\n\n\n").trim();
   return { type: "page", url: location.href, title: document.title, text, extractedAt: new Date().toISOString() };
+}
+
+function extractChatInline() {
+  function visible(el) {
+    if (!el) return false;
+    try {
+      if (el.checkVisibility) return el.checkVisibility();
+      return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function textOf(el) {
+    if (!el) return "";
+    const clone = el.cloneNode(true);
+    for (const hidden of clone.querySelectorAll('[aria-hidden="true"],button,[role="tooltip"],noscript,style,script')) {
+      hidden.remove();
+    }
+    for (const pre of clone.querySelectorAll("pre")) {
+      const code = pre.querySelector("code");
+      const lang = code?.className.match(/language-(\w+)/)?.[1] ?? "";
+      const content = (code ?? pre).textContent ?? "";
+      pre.replaceWith("\n```" + lang + "\n" + content.trim() + "\n```\n");
+    }
+    for (const code of clone.querySelectorAll("code")) {
+      code.replaceWith("`" + code.textContent + "`");
+    }
+    return (clone.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function platformName() {
+    const host = location.hostname;
+    if (host === "chat.openai.com" || host === "chatgpt.com") return "chatgpt";
+    if (host === "claude.ai") return "claude";
+    if (host === "gemini.google.com") return "gemini";
+    if (host === "grok.com") return "grok";
+    if (host === "chat.deepseek.com") return "deepseek";
+    if (host === "chat.mistral.ai") return "mistral";
+    if (host === "perplexity.ai" || host === "www.perplexity.ai") return "perplexity";
+    return host || "unknown";
+  }
+
+  function fallbackFullText() {
+    const main = document.querySelector("main,[role='main'],#main") ?? document.body;
+    const text = textOf(main);
+    return text ? [{ role: "assistant", content: "[Full page text]\n\n" + text }] : [];
+  }
+
+  function extractChatGpt() {
+    const messages = [];
+    const articles = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+    for (const article of articles) {
+      const roleEl = article.querySelector("[data-message-author-role]");
+      const role = roleEl?.getAttribute("data-message-author-role");
+      if (role !== "user" && role !== "assistant") continue;
+      const text = textOf(article);
+      if (text) messages.push({ role, content: text });
+    }
+    if (messages.length) return messages;
+
+    const roleEls = document.querySelectorAll("[data-message-author-role]");
+    for (const el of roleEls) {
+      const role = el.getAttribute("data-message-author-role");
+      if (role !== "user" && role !== "assistant") continue;
+      const text = textOf(el);
+      if (text) messages.push({ role, content: text });
+    }
+    return messages.length ? messages : fallbackFullText();
+  }
+
+  function extractClaude() {
+    const messages = [];
+    const turns = document.querySelectorAll('[data-testid="human-turn"],[data-testid="ai-turn"]');
+    for (const turn of turns) {
+      const isHuman = turn.getAttribute("data-testid") === "human-turn";
+      const text = textOf(turn);
+      if (text) messages.push({ role: isHuman ? "user" : "assistant", content: text });
+    }
+    if (messages.length) return messages;
+
+    const humanEls = Array.from(document.querySelectorAll(".human-turn,[class*='HumanTurn']"));
+    const aiEls = Array.from(document.querySelectorAll(".ai-turn,[class*='AiTurn'],[class*='AssistantTurn']"));
+    const allTurns = [
+      ...humanEls.map((el) => ({ el, role: "user" })),
+      ...aiEls.map((el) => ({ el, role: "assistant" })),
+    ].sort((a, b) => {
+      const pos = a.el.compareDocumentPosition(b.el);
+      return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    });
+    for (const turn of allTurns) {
+      const text = textOf(turn.el);
+      if (text) messages.push({ role: turn.role, content: text });
+    }
+    return messages.length ? messages : fallbackFullText();
+  }
+
+  function extractGeneric() {
+    const messages = [];
+    const selectors = [
+      '[data-message-author-role]',
+      '[data-testid*="message" i]',
+      '[class*="message" i]',
+      '[class*="turn" i]',
+    ];
+    const seen = new Set();
+    for (const selector of selectors) {
+      const els = document.querySelectorAll(selector);
+      for (const el of els) {
+        if (seen.has(el) || !visible(el)) continue;
+        seen.add(el);
+        const marker = [
+          el.getAttribute("data-message-author-role"),
+          el.getAttribute("data-testid"),
+          el.getAttribute("aria-label"),
+          el.className,
+        ].join(" ").toLowerCase();
+        let role = null;
+        if (/user|human|you|query|prompt/.test(marker)) role = "user";
+        if (/assistant|ai|model|answer|response|bot/.test(marker)) role = "assistant";
+        if (!role) continue;
+        const text = textOf(el);
+        if (text) messages.push({ role, content: text });
+      }
+      if (messages.length) return messages;
+    }
+    return fallbackFullText();
+  }
+
+  function detectGenerating() {
+    const strongSelectors = [
+      'button[data-testid*="stop" i]',
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="停止" i]',
+      '[role="button"][aria-label*="stop" i]',
+      '[role="button"][aria-label*="停止" i]',
+      'button[title*="stop" i]',
+      '[data-testid*="stop-generation" i]',
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+      '[data-testid*="spinner" i]',
+      '.spinner',
+      '.loading',
+      '.streaming',
+    ];
+    for (const selector of strongSelectors) {
+      const els = document.querySelectorAll(selector);
+      for (const el of els) {
+        if (visible(el)) return true;
+      }
+    }
+    return undefined;
+  }
+
+  function detectErrorState() {
+    const patterns = [
+      /rate limit/i, /usage limit/i, /quota exceeded/i, /too many requests/i,
+      /login required/i, /sign in/i, /please log in/i, /session expired/i,
+      /captcha/i, /verify you.?re human/i, /are you a robot/i,
+      /something went wrong/i, /error generating/i, /unavailable/i,
+      /network error/i, /connection lost/i, /try again/i,
+      /response blocked/i, /content filtered/i, /violates.*policy/i,
+      /您已经达到.*上限/i, /用量.*限制/i, /请登录/i, /验证码/i,
+      /网络.*错误/i, /服务.*不可用/i, /生成.*失败/i,
+    ];
+    const selectors = [
+      '[role="alert"]', '[role="status"]', '.alert', '.error', '.warning',
+      '.notification', '.toast', '.snackbar', '.banner',
+      '[data-testid*="error"]', '[data-testid*="alert"]',
+      '.message-error', '.text-error', '.text-red-500',
+    ];
+    for (const selector of selectors) {
+      const els = document.querySelectorAll(selector);
+      for (const el of els) {
+        if (!visible(el)) continue;
+        const text = (el.textContent || "").trim();
+        if (!text) continue;
+        for (const pattern of patterns) {
+          if (pattern.test(text)) return { detected: true, message: text.slice(0, 300), element: selector };
+        }
+      }
+    }
+    return { detected: false };
+  }
+
+  const platform = platformName();
+  let messages;
+  if (platform === "chatgpt") messages = extractChatGpt();
+  else if (platform === "claude") messages = extractClaude();
+  else messages = extractGeneric();
+
+  return {
+    type: "chat",
+    platform,
+    url: location.href,
+    title: document.title,
+    messages,
+    extractedAt: new Date().toISOString(),
+    isGenerating: detectGenerating(),
+    errorState: detectErrorState(),
+    extractor: "background-inline",
+  };
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }

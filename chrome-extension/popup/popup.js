@@ -111,4 +111,10 @@ reconnectBtn.addEventListener("click", async () => {
 });
 
 refreshBtn.addEventListener("click", loadTabs);
+
+document.getElementById("diagLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("diagnostics.html") });
+});
+
 init();

@@ -10,6 +10,11 @@
  * chat parsing and returns the full readable text (Readability-style).
  */
 
+// ── Version marker (bump on every change to force fresh injection) ──────
+var EXTRACTOR_VERSION = 16;
+window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
+document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -56,6 +61,20 @@ const EXTRACTORS = {
   // Stable: articles with data-testid="conversation-turn-N" each contain
   // a [data-message-author-role] child.
   chatgpt: {
+    input: ['#prompt-textarea','textarea[data-id]','div[contenteditable="true"][data-lexical-editor]'],
+    send: ['button[data-testid="send-button"]','button[aria-label="Send"]'],
+    stop: [
+      'button[data-testid="stop-button"]',
+      'button[data-testid*="stop" i]',
+      'button[aria-label*="stop" i]',
+      'button[title*="stop" i]',
+      'button[data-testid="send-button"]',
+    ],
+    busy: [
+      '[data-testid*="generating" i]',
+      '[data-testid*="stream" i]',
+      '[aria-busy="true"]',
+    ],
     detect: () =>
       location.hostname === "chat.openai.com" || location.hostname === "chatgpt.com",
 
@@ -97,6 +116,21 @@ const EXTRACTORS = {
   // ── Claude (claude.ai) ────────────────────────────────────────────────────
   // Stable: data-testid="human-turn" / "ai-turn"
   claude: {
+    input: ['div.ProseMirror[contenteditable="true"]','div[contenteditable="true"][data-placeholder]'],
+    send: ['button[aria-label*="Send Message" i]','button[aria-label*="Send" i]'],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[title*="stop" i]',
+      'button[data-testid*="stop" i]',
+      '[role="button"][aria-label*="stop" i]',
+    ],
+    busy: [
+      '[data-testid*="stream" i]',
+      '[data-testid*="generating" i]',
+      '[data-testid*="loading" i]',
+      '[aria-busy="true"]',
+      '[role="status"]',
+    ],
     detect: () => location.hostname === "claude.ai",
 
     extract() {
@@ -141,6 +175,23 @@ const EXTRACTORS = {
   // ── Gemini ────────────────────────────────────────────────────────────────
   // Gemini uses Angular custom elements: <user-query> and <model-response>
   gemini: {
+    input: ['rich-textarea div[contenteditable="true"]','div[contenteditable="true"][role="textbox"]'],
+    send: ['button[aria-label*="send message" i]','.send-button-container button'],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="cancel" i]',
+      'button[mattooltip*="stop" i]',
+      'button[data-testid*="stop" i]',
+      '.stop-button button',
+    ],
+    busy: [
+      'model-response[loading]',
+      'model-response[aria-busy="true"]',
+      'mat-progress-spinner',
+      '[role="progressbar"]',
+      '[class*="loading" i]',
+      '[class*="generating" i]',
+    ],
     detect: () => location.hostname === "gemini.google.com",
 
     extract() {
@@ -173,6 +224,23 @@ const EXTRACTORS = {
 
   // ── Grok ──────────────────────────────────────────────────────────────────
   grok: {
+    input: ['textarea[placeholder*="Ask"]','div[contenteditable="true"][role="textbox"]'],
+    send: ['button[aria-label*="send" i]'],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="cancel" i]',
+      'button[data-testid*="stop" i]',
+      'button[data-testid*="cancel" i]',
+      '[role="button"][aria-label*="stop" i]',
+    ],
+    busy: [
+      '[data-testid*="generating" i]',
+      '[data-testid*="thinking" i]',
+      '[data-testid*="loading" i]',
+      '[class*="streaming" i]',
+      '[class*="thinking" i]',
+      '[class*="loading" i]',
+    ],
     detect: () => location.hostname === "grok.com",
 
     extract() {
@@ -225,6 +293,24 @@ const EXTRACTORS = {
 
   // ── DeepSeek ──────────────────────────────────────────────────────────────
   deepseek: {
+    input: ['textarea#chat-input','textarea[placeholder*="发"]'],
+    send: ['div[role="button"][aria-label*="发" i]','button[type="submit"]'],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="停止" i]',
+      'button[title*="停止" i]',
+      'div[role="button"][aria-label*="停止" i]',
+      'div[role="button"][class*="stop" i]',
+      '[class*="stop" i][role="button"]',
+    ],
+    busy: [
+      '[class*="stream" i]',
+      '[class*="loading" i]',
+      '[class*="generating" i]',
+      '[class*="thinking" i]',
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+    ],
     detect: () => location.hostname === "chat.deepseek.com",
 
     extract() {
@@ -275,6 +361,32 @@ const EXTRACTORS = {
 
   // ── Mistral (Le Chat) ─────────────────────────────────────────────────────
   mistral: {
+    input: [
+      'textarea[placeholder*="Ask" i]',
+      'textarea[placeholder*="Message" i]',
+      'div[contenteditable="true"][role="textbox"]',
+      'div.ProseMirror[contenteditable="true"]',
+    ],
+    send: [
+      'button[aria-label*="send" i]',
+      'button[type="submit"]',
+      '[role="button"][aria-label*="send" i]',
+    ],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="cancel" i]',
+      'button[title*="stop" i]',
+      'button[data-testid*="stop" i]',
+      '[role="button"][aria-label*="stop" i]',
+    ],
+    busy: [
+      '[data-testid*="stream" i]',
+      '[data-testid*="loading" i]',
+      '[class*="stream" i]',
+      '[class*="loading" i]',
+      '[class*="generating" i]',
+      '[aria-busy="true"]',
+    ],
     detect: () => location.hostname === "chat.mistral.ai",
 
     extract() {
@@ -323,6 +435,33 @@ const EXTRACTORS = {
   // Perplexity is more of a search engine than a chat, but the conversation
   // thread follows a query → answer → follow-up pattern.
   perplexity: {
+    input: [
+      'textarea[placeholder*="Ask" i]',
+      'textarea[placeholder*="Follow" i]',
+      'div[contenteditable="true"][role="textbox"]',
+      '[contenteditable="true"][aria-label*="Ask" i]',
+    ],
+    send: [
+      'button[aria-label*="submit" i]',
+      'button[aria-label*="send" i]',
+      'button[type="submit"]',
+    ],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="cancel" i]',
+      'button[title*="stop" i]',
+      'button[data-testid*="stop" i]',
+      '[role="button"][aria-label*="stop" i]',
+    ],
+    busy: [
+      '[data-testid*="answer-loading" i]',
+      '[data-testid*="loading" i]',
+      '[class*="answer-loading" i]',
+      '[class*="animate-spin" i]',
+      '[class*="loading" i]',
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+    ],
     detect: () =>
       location.hostname === "perplexity.ai" || location.hostname === "www.perplexity.ai",
 
@@ -417,16 +556,131 @@ function extractPage() {
   };
 }
 
+var GENERIC_GENERATION_QUIET_MS = 2200;
+var GENERIC_GENERATION_OBSERVER_ROOT = null;
+var GENERIC_GENERATION_STATE = {
+  primed: false,
+  active: false,
+  lastMutationAt: 0,
+  lastTextLength: 0,
+};
+
+function visiblePageTextLength() {
+  var root = document.querySelector("main,[role='main']") || document.body || document.documentElement;
+  return textOf(root).length;
+}
+
+function isComposerMutationTarget(node) {
+  var el = node && node.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  if (!el || !el.closest) return false;
+  return !!el.closest('textarea,input,[contenteditable="true"],form,[role="textbox"]');
+}
+
+function markGenericGenerationActivity() {
+  var now = performance.now();
+  var len = visiblePageTextLength();
+  if (GENERIC_GENERATION_STATE.primed || Math.abs(len - GENERIC_GENERATION_STATE.lastTextLength) >= 8) {
+    GENERIC_GENERATION_STATE.active = true;
+    GENERIC_GENERATION_STATE.lastMutationAt = now;
+  }
+  GENERIC_GENERATION_STATE.lastTextLength = len;
+}
+
+function ensureGenericGenerationObserver() {
+  var root = document.body || document.documentElement;
+  if (!root || GENERIC_GENERATION_OBSERVER_ROOT === root) return;
+  GENERIC_GENERATION_OBSERVER_ROOT = root;
+  GENERIC_GENERATION_STATE.lastTextLength = visiblePageTextLength();
+  var obs = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var m = mutations[i];
+      if (isComposerMutationTarget(m.target)) continue;
+      markGenericGenerationActivity();
+      break;
+    }
+  });
+  obs.observe(root, { subtree: true, childList: true, characterData: true });
+}
+
+function primeGenericGenerationProbe() {
+  ensureGenericGenerationObserver();
+  GENERIC_GENERATION_STATE.primed = true;
+  GENERIC_GENERATION_STATE.active = false;
+  GENERIC_GENERATION_STATE.lastMutationAt = performance.now();
+  GENERIC_GENERATION_STATE.lastTextLength = visiblePageTextLength();
+}
+
+function isGenericGeneratingNow() {
+  ensureGenericGenerationObserver();
+  if (!GENERIC_GENERATION_STATE.active) return false;
+  if (performance.now() - GENERIC_GENERATION_STATE.lastMutationAt <= GENERIC_GENERATION_QUIET_MS) return true;
+  GENERIC_GENERATION_STATE.active = false;
+  GENERIC_GENERATION_STATE.primed = false;
+  return false;
+}
+
 function isGeneratingNow() {
-  var selectors = ['button[data-testid*="stop" i]','button[aria-label*="stop" i]','button[aria-label*="停止" i]'];
-  for (var i = 0; i < selectors.length; i++) {
-    var els = document.querySelectorAll(selectors[i]);
+  var cfg = getCfg ? getCfg() : null;
+  var turnPulse = consumeAssistantTurnPulse();
+
+  if (hasActiveStopSignal(cfg)) return true;
+  if (hasActiveBusySignal(cfg)) return true;
+  if (hasGenerationDisabledSignal(cfg)) return true;
+  if (!turnPulse && hasEnabledSendControl(cfg)) return false;
+  if (isGenericGeneratingNow()) return true;
+  if (turnPulse) return true;
+  return false;
+}
+
+function detectErrorState() {
+  // 1. Structural signals: retry buttons, login prompts, captcha
+  var retryBtn = document.querySelector(
+    'button[data-testid*="retry" i],button[aria-label*="retry" i],' +
+    'button[aria-label*="regenerate" i],.retry-btn,.regenerate-btn'
+  );
+  if (retryBtn && vis(retryBtn)) {
+    return { detected: true, message: "Retry/regenerate button visible — likely rate-limited or error", element: "retry-button" };
+  }
+
+  var loginPrompt = document.querySelector(
+    '[data-testid*="login" i],[data-testid*="sign-in" i],' +
+    '.login-prompt,.sign-in-prompt,#login-form'
+  );
+  if (loginPrompt && vis(loginPrompt)) {
+    return { detected: true, message: "Login/sign-in prompt visible", element: "login-prompt" };
+  }
+
+  // 2. Text-based check only within error containers (not full page)
+  var errorSelectors = [
+    '[role="alert"]', '[role="status"]', '.alert', '.error', '.warning',
+    '.notification', '.toast', '.banner',
+    '[data-testid*="error" i]', '[data-testid*="alert" i]',
+  ];
+  var errorPatterns = [
+    /rate limit/i, /usage limit/i, /quota exceeded/i, /too many requests/i,
+    /login required/i, /sign in/i, /session expired/i,
+    /captcha/i, /verify you.?re human/i,
+    /something went wrong/i, /error generating/i, /unavailable/i,
+    /network error/i, /connection lost/i,
+    /response blocked/i, /content filtered/i, /violates.*policy/i,
+    /您已经达到.*上限/i, /用量.*限制/i, /请登录/i, /验证码/i,
+    /网络.*错误/i, /服务.*不可用/i,
+  ];
+  for (var i = 0; i < errorSelectors.length; i++) {
+    var els = document.querySelectorAll(errorSelectors[i]);
     for (var j = 0; j < els.length; j++) {
       var el = els[j];
-      if (el && el.offsetParent) return true;
+      if (!vis(el)) continue;
+      var text = (el.textContent || "").trim();
+      if (!text) continue;
+      for (var k = 0; k < errorPatterns.length; k++) {
+        if (errorPatterns[k].test(text)) {
+          return { detected: true, message: text.slice(0, 300), element: errorSelectors[i] };
+        }
+      }
     }
   }
-  return false;
+  return { detected: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +701,7 @@ function fallbackFullText(defaultRole) {
 // ---------------------------------------------------------------------------
 
 function extractChat() {
+  ensureGenericGenerationObserver();
   for (const [name, ext] of Object.entries(EXTRACTORS)) {
     if (ext.detect()) {
       try {
@@ -459,6 +714,7 @@ function extractChat() {
           messages,
           extractedAt: new Date().toISOString(),
           isGenerating: isGeneratingNow(),
+          errorState: detectErrorState(),
         };
       } catch (err) {
         return { error: `Extraction failed on ${name}: ${err.message}` };
@@ -873,25 +1129,277 @@ function buildArtifactsResult(artifacts) {
 
 
 // ── Platform-aware input/send button finders ────────────────────────────
-const PLATFORM_SELECTORS = {
-  chatgpt: { input: ['#prompt-textarea','textarea[data-id]','div[contenteditable="true"][data-lexical-editor]'], send: ['button[data-testid="send-button"]','button[aria-label="Send"]'] },
-  gemini:  { input: ['rich-textarea div[contenteditable="true"]','div[contenteditable="true"][role="textbox"]'], send: ['button[aria-label*="send message" i]','.send-button-container button'] },
-  claude:  { input: ['div.ProseMirror[contenteditable="true"]','div[contenteditable="true"][data-placeholder]'], send: ['button[aria-label*="Send Message" i]'] },
-  deepseek:{ input: ['textarea#chat-input','textarea[placeholder*="发给"]'], send: ['div[role="button"][aria-label*="发送" i]','button[type="submit"]'] },
-  grok:    { input: ['textarea[placeholder*="Ask"]','div[contenteditable="true"][role="textbox"]'], send: ['button[aria-label*="send" i]'] },
-};
+// Reads from unified EXTRACTORS (each entry has .input / .send arrays)
 
 function getCfg() {
-  var h=location.hostname;
-  if(h.includes('chatgpt')||h.includes('openai')) return PLATFORM_SELECTORS.chatgpt;
-  if(h.includes('gemini')) return PLATFORM_SELECTORS.gemini;
-  if(h.includes('claude.ai')) return PLATFORM_SELECTORS.claude;
-  if(h.includes('deepseek')) return PLATFORM_SELECTORS.deepseek;
-  if(h.includes('grok')) return PLATFORM_SELECTORS.grok;
+  for (var key in EXTRACTORS) {
+    var entry = EXTRACTORS[key];
+    if (entry.input && entry.send && entry.detect()) {
+      return Object.assign({ name: key }, entry);
+    }
+  }
   return null;
 }
 
-function vis(el) { if(!el) return false; try { return el.checkVisibility?el.checkVisibility():!!el.offsetParent; } catch(e) { return false; } }
+function vis(el) {
+  if (!el) return false;
+  try {
+    if (el.checkVisibility) {
+      try {
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      } catch (e) {
+        if (!el.checkVisibility()) return false;
+      }
+    }
+    var style = window.getComputedStyle(el);
+    if (!style || style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    if (parseFloat(style.opacity || "1") <= 0.01) return false;
+    var rects = el.getClientRects();
+    if (!rects || rects.length === 0) return false;
+    for (var i = 0; i < rects.length; i++) {
+      if (rects[i].width > 0 && rects[i].height > 0) return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+function isChatGptPage() {
+  return location.hostname === "chatgpt.com" || location.hostname === "chat.openai.com";
+}
+
+function hasStopIcon(button) {
+  if (!button) return false;
+  var svgs = button.querySelectorAll("svg");
+  for (var i = 0; i < svgs.length; i++) {
+    var svg = svgs[i];
+    if (!vis(svg)) continue;
+    var label = String(svg.getAttribute("aria-label") || "").toLowerCase();
+    if (label.indexOf("stop") >= 0 || label.indexOf("停止") >= 0) return true;
+    var svgText = collectSignalText(svg);
+    if (/\b(stop|cancel|interrupt)\b|停止|中止|取消/i.test(svgText)) return true;
+    var rects = svg.querySelectorAll("rect");
+    for (var j = 0; j < rects.length; j++) {
+      var rect = rects[j];
+      var w = parseFloat(rect.getAttribute("width") || "0");
+      var h = parseFloat(rect.getAttribute("height") || "0");
+      var ratio = h > 0 ? w / h : 0;
+      if (w >= 4 && h >= 4 && ratio >= 0.65 && ratio <= 1.35) return true;
+    }
+  }
+  return false;
+}
+
+function selectorList() {
+  var out = [];
+  for (var i = 0; i < arguments.length; i++) {
+    var group = arguments[i];
+    if (!group) continue;
+    for (var j = 0; j < group.length; j++) {
+      if (group[j] && out.indexOf(group[j]) < 0) out.push(group[j]);
+    }
+  }
+  return out;
+}
+
+function queryAllSafe(selectors) {
+  var out = [];
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      var els = document.querySelectorAll(selectors[i]);
+      for (var j = 0; j < els.length; j++) out.push(els[j]);
+    } catch (e) {}
+  }
+  return out;
+}
+
+function controlFor(el) {
+  if (!el || !el.closest) return el;
+  return el.closest('button,[role="button"],input,textarea,[contenteditable="true"]') || el;
+}
+
+function isDisabledControl(el) {
+  if (!el) return false;
+  var control = controlFor(el);
+  return !!(
+    control.disabled ||
+    control.getAttribute("disabled") !== null ||
+    control.getAttribute("aria-disabled") === "true" ||
+    control.getAttribute("data-disabled") === "true" ||
+    control.getAttribute("inert") !== null
+  );
+}
+
+function collectSignalText(el) {
+  if (!el) return "";
+  var attrs = [
+    "aria-label",
+    "title",
+    "data-testid",
+    "data-test-id",
+    "data-state",
+    "data-icon",
+    "class",
+    "id",
+    "mattooltip",
+  ];
+  var parts = [];
+  for (var i = 0; i < attrs.length; i++) {
+    try {
+      parts.push(el.getAttribute(attrs[i]) || "");
+    } catch (e) {}
+  }
+  var role = "";
+  try { role = el.getAttribute("role") || ""; } catch (e) {}
+  if (role === "button" || el.tagName === "BUTTON" || role === "status") {
+    parts.push((el.textContent || "").slice(0, 120));
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function isIgnoredSignalArea(el) {
+  return !!(el && el.closest && el.closest('nav,header,footer,[role="navigation"],[role="banner"],[role="contentinfo"]'));
+}
+
+function isRootSized(el) {
+  if (!el || el === document.body || el === document.documentElement) return true;
+  try {
+    var r = el.getBoundingClientRect();
+    return r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.85;
+  } catch (e) {
+    return false;
+  }
+}
+
+function isActiveStopElement(el, cfg) {
+  var target = controlFor(el);
+  if (!vis(target) && !vis(el)) return false;
+  if (isIgnoredSignalArea(target) || isDisabledControl(target)) return false;
+
+  var text = (collectSignalText(target) + " " + collectSignalText(el)).toLowerCase();
+  var looksLikeStop = /\b(stop|cancel|interrupt|abort)\b|停止|中止|取消|终止/.test(text);
+  if (looksLikeStop) return true;
+  if (hasStopIcon(target)) return true;
+
+  var stopIcon = target.querySelector && target.querySelector('[data-icon*="stop" i],[class*="stop" i],svg[aria-label*="stop" i],svg[aria-label*="停止" i]');
+  if (stopIcon && vis(stopIcon)) return true;
+
+  // Morphing send buttons such as ChatGPT keep the send-button test id while
+  // swapping the SVG from an arrow to a square. Without the stop icon/label it
+  // is a normal send button, not a generation signal.
+  if (cfg && elementMatchesAny(target, cfg.send || [])) return false;
+  return false;
+}
+
+function hasActiveStopSignal(cfg) {
+  var selectors = selectorList(cfg && cfg.stop, DEFAULT_STOP_SEL);
+  var els = queryAllSafe(selectors);
+  for (var i = 0; i < els.length; i++) {
+    if (isActiveStopElement(els[i], cfg)) return true;
+  }
+  return false;
+}
+
+function isActiveBusyElement(el) {
+  var target = controlFor(el);
+  if (!vis(target) && !vis(el)) return false;
+  if (isIgnoredSignalArea(target) || isRootSized(target)) return false;
+  var text = (collectSignalText(target) + " " + collectSignalText(el)).toLowerCase();
+  var role = "";
+  try { role = el.getAttribute("role") || target.getAttribute("role") || ""; } catch (e) {}
+  if (role === "progressbar") return true;
+  if (el.getAttribute && el.getAttribute("aria-busy") === "true") return true;
+  if (target.getAttribute && target.getAttribute("aria-busy") === "true") return true;
+  if (/\b(spinner|loading|streaming|generating|responding|thinking|progress|animate-spin|typing)\b|生成|思考|加载|正在|回答中/.test(text)) return true;
+  return false;
+}
+
+function hasActiveBusySignal(cfg) {
+  var selectors = selectorList(cfg && cfg.busy, DEFAULT_BUSY_SEL);
+  var els = queryAllSafe(selectors);
+  for (var i = 0; i < els.length; i++) {
+    if (isActiveBusyElement(els[i])) return true;
+  }
+  return false;
+}
+
+function elementMatchesAny(el, selectors) {
+  if (!el || !el.matches || !selectors) return false;
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      if (el.matches(selectors[i])) return true;
+    } catch (e) {}
+  }
+  return false;
+}
+
+function hasEnabledSendControl(cfg) {
+  if (!cfg || !cfg.send) return false;
+  var els = queryAllSafe(cfg.send);
+  for (var i = 0; i < els.length; i++) {
+    var target = controlFor(els[i]);
+    if (!vis(target) || isDisabledControl(target)) continue;
+    if (isActiveStopElement(target, cfg)) continue;
+    return true;
+  }
+  return false;
+}
+
+function hasGenerationDisabledSignal(cfg) {
+  if (!cfg || !cfg.send) return false;
+  var els = queryAllSafe(cfg.send);
+  for (var i = 0; i < els.length; i++) {
+    var target = controlFor(els[i]);
+    if (!vis(target) || !isDisabledControl(target)) continue;
+    if (hasStopIcon(target)) return true;
+    var text = collectSignalText(target).toLowerCase();
+    if (/\b(stop|cancel|loading|streaming|generating|responding|thinking)\b|停止|中止|取消|生成|思考|回答中/.test(text)) return true;
+    var busyChild = target.querySelector && target.querySelector(DEFAULT_BUSY_SEL.join(","));
+    if (busyChild && isActiveBusyElement(busyChild)) return true;
+  }
+  return false;
+}
+
+function countAssistantTurns() {
+  if (!isChatGptPage()) return 0;
+  var turns = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+  var count = 0;
+  for (var i = 0; i < turns.length; i++) {
+    if (turns[i].querySelector('[data-message-author-role="assistant"]')) count++;
+  }
+  return count;
+}
+
+var _assistantTurnState = { primed: false, count: 0, pulse: false };
+
+function primeAssistantTurnProbe() {
+  primeGenericGenerationProbe();
+  if (!isChatGptPage()) return;
+  _assistantTurnState.primed = true;
+  _assistantTurnState.count = countAssistantTurns();
+  _assistantTurnState.pulse = false;
+}
+
+function consumeAssistantTurnPulse() {
+  if (!isChatGptPage()) return false;
+  var count = countAssistantTurns();
+  if (_assistantTurnState.primed && count > _assistantTurnState.count) {
+    _assistantTurnState.primed = false;
+    _assistantTurnState.count = count;
+    _assistantTurnState.pulse = false;
+    return true;
+  }
+  if (!_assistantTurnState.primed && count > _assistantTurnState.count) {
+    _assistantTurnState.count = count;
+    if (!_assistantTurnState.pulse) {
+      _assistantTurnState.pulse = true;
+      return true;
+    }
+  }
+  _assistantTurnState.pulse = false;
+  return false;
+}
 
 function findInput() {
   var cfg=getCfg();
@@ -917,7 +1425,43 @@ const SEND_CONFIRMATION_MODES = new Set(["dispatch","confirmed"]);
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 1800;
 const MAX_BUTTON_READY_FRAMES = 8;
 const DEFAULT_USER_MSG_SEL = ['[data-message-author-role="user"]','[data-testid="user-message"]','user-query','.user-query'];
-const DEFAULT_STOP_SEL = ['button[data-testid*="stop" i]','button[aria-label*="stop" i]','button[aria-label*="停止" i]'];
+const DEFAULT_STOP_SEL = [
+  'button[data-testid*="stop" i]',
+  'button[data-testid*="cancel" i]',
+  'button[aria-label*="stop" i]',
+  'button[aria-label*="停止" i]',
+  'button[aria-label*="cancel" i]',
+  '[role="button"][aria-label*="stop" i]',
+  '[role="button"][aria-label*="停止" i]',
+  '[role="button"][aria-label*="cancel" i]',
+  'button[title*="stop" i]',
+  'button[title*="停止" i]',
+  'button[title*="cancel" i]',
+  '[data-testid="stop-button"]',
+  '[data-testid*="stop-generation" i]',
+  '[data-icon*="stop" i]',
+  'svg[aria-label*="stop" i]',
+  'svg[aria-label*="停止" i]',
+  'button[data-testid="send-button"][aria-label*="stop" i]',
+  'button[data-testid="send-button"][aria-label*="停止" i]',
+  'button[data-testid="send-button"][title*="stop" i]',
+  'button[data-testid="send-button"] [data-icon*="stop" i]',
+  'button[data-testid="send-button"] svg[aria-label*="stop" i]',
+];
+const DEFAULT_BUSY_SEL = [
+  '[data-testid*="spinner" i]',
+  '[data-testid*="loading" i]',
+  '[data-testid*="stream" i]',
+  '[data-testid*="generating" i]',
+  '[role="progressbar"]',
+  '[aria-busy="true"]',
+  '[class*="spinner" i]',
+  '[class*="loading" i]',
+  '[class*="streaming" i]',
+  '[class*="generating" i]',
+  '[class*="thinking" i]',
+  '[class*="animate-spin" i]',
+];
 
 function norm(v){var s=String(v||"");s=s.replace(/[\r\n]+/g,"\n");s=s.replace(/\s+/g," ");return s.trim();}
 function readComp(input){return(input instanceof HTMLTextAreaElement||input instanceof HTMLInputElement)?input.value:(input.innerText||input.textContent||"");}
@@ -947,9 +1491,10 @@ function waitSubmission(opts){
   var input=opts.input,text=opts.text,sendAction=opts.sendAction,timeout=opts.timeout||DEFAULT_CONFIRMATION_TIMEOUT_MS;
   return new Promise(function(resolve,reject){
     var started=performance.now();
-    var root=input.closest('[role="main"]')||input.closest("main")||document.body;
+    var root=document.body||document.documentElement;
     var expected=norm(text);
     var initialUser=root.querySelectorAll(DEFAULT_USER_MSG_SEL.join(",")).length;
+    var assistantTurnsBeforeSend=isChatGptPage()?countAssistantTurns():0;
     var settled=false,obs=null,timeoutId=null,timers=[];
     function cleanup(){if(obs){obs.disconnect();obs=null;}input.removeEventListener("input",check,true);input.removeEventListener("change",check,true);clearTimeout(timeoutId);timers.forEach(function(t){clearTimeout(t);});}
     function finish(ok,sig){if(settled)return;settled=true;cleanup();resolve({confirmed:ok,signal:sig,durationMs:Math.round(performance.now()-started)});}
@@ -958,8 +1503,10 @@ function waitSubmission(opts){
       var cur=norm(readComp(input));
       if(cur===""||cur!==expected){finish(true,"composer_changed");return;}
       if(root.querySelectorAll(DEFAULT_USER_MSG_SEL.join(",")).length>initialUser){finish(true,"user_message_added");return;}
-      var stopBtn=root.querySelector(DEFAULT_STOP_SEL.join(","));
-      if(stopBtn&&stopBtn.offsetParent){finish(true,"generation_started");return;}
+      if(isGenericGeneratingNow()){finish(true,"dom_generation_started");return;}
+      var cfg=getCfg?getCfg():null;
+      if(hasActiveStopSignal(cfg)||hasActiveBusySignal(cfg)||hasGenerationDisabledSignal(cfg)){finish(true,"generation_started");return;}
+      if(isChatGptPage()&&countAssistantTurns()>assistantTurnsBeforeSend){finish(true,"generation_started");return;}
     }
     obs=new MutationObserver(check);
     obs.observe(root,{subtree:true,childList:true,characterData:true,attributes:true});
@@ -986,14 +1533,16 @@ async function sendMessage(text,confirmation){
     else{method="enter";sendAction=function(){input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:13,bubbles:true}));};}
   }
   var cfg=getCfg?getCfg():{};
-  if(confirmation==="dispatch"){await Promise.resolve().then(sendAction);return{ok:true,sent:true,confirmed:false,confirmation:"dispatch",confirmationSignal:"dispatched",site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};}
+  primeAssistantTurnProbe();
+  if(confirmation==="dispatch"){await Promise.resolve().then(sendAction);return{ok:true,sent:true,confirmed:false,confirmation:"dispatch",confirmationSignal:"dispatched",platform:cfg.name||"unknown",site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};}
   var r=await waitSubmission({input:input,text:text,sendAction:sendAction});
   if(!r.confirmed)throw new Error("提交确认超时"+DEFAULT_CONFIRMATION_TIMEOUT_MS+"ms");
-  return{ok:true,sent:true,confirmed:true,confirmation:"confirmed",confirmationSignal:r.signal,site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};
+  return{ok:true,sent:true,confirmed:true,confirmation:"confirmed",confirmationSignal:r.signal,platform:cfg.name||"unknown",site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};
 }
 
 // Listen for messages from background.js
 chrome.runtime.onMessage.addListener(function(request,sender,sendResponse){
+  if(request.type==="__CHATLINK_DIAGNOSTICS__"){sendResponse({version:EXTRACTOR_VERSION,cfgName:getCfg?getCfg()?.name:null,hasConfirmationSignal:true,hasGetCfgNameFix:true});return true;}
   if(request.type==="SEND_MESSAGE"){sendMessage(request.text||request.message,request.confirmation||"confirmed").then(sendResponse).catch(function(e){sendResponse({ok:false,sent:false,error:e.message});});return true;}
   if(request.type==="EXTRACT_CHAT")sendResponse(extractChat());
   if(request.type==="EXTRACT_PAGE")sendResponse(extractPage());
