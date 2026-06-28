@@ -1,0 +1,53 @@
+{
+  "name": "chatmcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that bridges Claude Code to your AI browser tabs (ChatGPT, Claude, Gemini, Grok, DeepSeek, Mistral, Perplexity)",
+  "type": "module",
+  "main": "dist/index.js",
+  "author": "Rohit Gupta <indiantinker@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/indiantinker/chatMCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/indiantinker/chatMCP/issues"
+  },
+  "homepage": "https://github.com/indiantinker/chatMCP#readme",
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "chatgpt",
+    "gemini",
+    "browser",
+    "context",
+    "ai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "bin": {
+    "chatmcp-server": "./dist/index.js"
+  }
+}

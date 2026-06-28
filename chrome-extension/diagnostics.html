@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatMCP Diagnostics</title>
+<style>
+  body { font-family: system-ui; max-width: 900px; margin: 20px auto; padding: 20px; background: #111; color: #eee; }
+  h1 { font-size: 20px; margin-bottom: 8px; }
+  .status { padding: 12px 16px; border-radius: 8px; margin: 10px 0; font-weight: bold; }
+  .connected { background: #166534; color: #86efac; }
+  .disconnected { background: #7f1d1d; color: #fca5a5; }
+  .log-entry { padding: 4px 8px; margin: 2px 0; font-family: monospace; font-size: 13px; border-left: 3px solid #333; }
+  .log-entry.error { border-color: #ef4444; color: #fca5a5; }
+  .log-entry.ok { border-color: #22c55e; }
+  .log-entry.warn { border-color: #eab308; color: #fde68a; }
+  .log-entry.info { border-color: #3b82f6; }
+  .btn { padding: 8px 16px; margin: 4px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .btn-refresh { background: #2563eb; color: white; }
+  .btn-clear { background: #dc2626; color: white; }
+  .btn-reconnect { background: #ca8a04; color: black; }
+  .meta { color: #888; font-size: 12px; margin: 8px 0; }
+  #logContainer { max-height: 500px; overflow-y: auto; background: #1a1a1a; border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<h1>ChatMCP Diagnostics</h1>
+<div id="statusBar" class="status disconnected">Checking...</div>
+<div class="meta" id="metaInfo"></div>
+<div>
+  <button class="btn btn-refresh" onclick="refresh()">Refresh</button>
+  <button class="btn btn-reconnect" onclick="reconnect()">Force Reconnect</button>
+  <button class="btn btn-clear" onclick="clearLogs()">Clear Logs</button>
+</div>
+<h3>Connection Log</h3>
+<div id="logContainer"><div id="logContent">Loading...</div></div>
+
+<script src="diagnostics.js"></script>
+</body>
+</html>
