@@ -1,7 +1,7 @@
 import { createServer as createHttpServer, type IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomBytes } from "crypto";
-import type { ServerMessage, ExtensionMessage, AiTab, ChatContent, PageContent, ArtifactsContent } from "./types.js";
+import { ChatMcpError, type ServerMessage, type ExtensionMessage, type AiTab, type ChatContent, type PageContent, type ArtifactsContent, type ChatMcpErrorCode, type StructuredError } from "./types.js";
 
 const BRIDGE_PORT = 27182;
 const RETRY_DELAY_MS = 500;
@@ -13,6 +13,8 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
 }
 
+type BridgeState = "idle" | "starting" | "ready" | "failed" | "closing";
+
 export class ExtensionBridge {
   private wss: WebSocketServer | null = null;
   private client: WebSocket | null = null;
@@ -20,22 +22,64 @@ export class ExtensionBridge {
   private requestCounter = 0;
   private readonly token: string;
   private httpServer: ReturnType<typeof createHttpServer> | null = null;
-  private closing = false;
+  private state: BridgeState = "idle";
   private startResolve: (() => void) | null = null;
-  private _ready: Promise<void>;
+  private startReject: ((reason: Error) => void) | null = null;
+  private _ready: Promise<void> | null = null;
+  private lastStartError: Error | null = null;
 
   constructor() {
     this.token = randomBytes(32).toString("hex");
-    this._ready = new Promise<void>(resolve => { this.startResolve = resolve; });
+  }
+
+  start(): Promise<void> {
+    if (this.state === "ready") return Promise.resolve();
+    if (this.state === "starting" && this._ready) return this._ready;
+    if (this.state === "closing") {
+      return Promise.reject(this.makeError("BRIDGE_NOT_READY", "bridge.start", "Bridge is closing.", undefined, true));
+    }
+    if (this.state === "failed") {
+      return Promise.reject(
+        this.lastStartError ??
+          this.makeError("BRIDGE_START_FAILED", "bridge.start", "Bridge failed to start.", undefined, true)
+      );
+    }
+
+    this.state = "starting";
+    this._ready = new Promise<void>((resolve, reject) => {
+      this.startResolve = resolve;
+      this.startReject = reject;
+    });
     this.startServer(0);
+    return this._ready;
   }
 
   /** Wait until bridge is listening (or already listening) */
   async ensureStarted(): Promise<void> {
-    return this._ready;
+    return this.start();
   }
 
-  private startServer(attempt: number) {
+  private makeError(
+    code: ChatMcpErrorCode,
+    stage: string,
+    message: string,
+    requestId?: string,
+    retryable = false,
+    details?: unknown
+  ): ChatMcpError {
+    return new ChatMcpError({ code, stage, message, requestId, retryable, details });
+  }
+
+  private failStart(error: Error) {
+    this.state = "failed";
+    this.lastStartError = error;
+    this.startReject?.(error);
+    this.startResolve = null;
+    this.startReject = null;
+  }
+
+  private startServer(attempt: number): void {
+    if (this.state !== "starting") return;
     // Create HTTP server without callback so 'upgrade' event fires.
     // WebSocket upgrade requests are handled via the 'upgrade' listener;
     // regular HTTP goes through the 'request' listener.
@@ -104,19 +148,40 @@ export class ExtensionBridge {
           );
           setTimeout(() => this.startServer(attempt + 1), RETRY_DELAY_MS);
         } else {
-          process.stderr.write(
-            `Bridge port ${BRIDGE_PORT} still in use after ${MAX_RETRIES} retries. Giving up.\n`
+          const startError = this.makeError(
+            "BRIDGE_START_FAILED",
+            "bridge.listen",
+            `Bridge port ${BRIDGE_PORT} still in use after ${MAX_RETRIES} retries.`,
+            undefined,
+            true,
+            { port: BRIDGE_PORT, attempts: MAX_RETRIES }
           );
+          process.stderr.write(`${startError.message} Giving up.\n`);
+          this.failStart(startError);
         }
       } else {
         process.stderr.write(`Bridge HTTP error: ${err.message}\n`);
+        this.failStart(
+          this.makeError("BRIDGE_START_FAILED", "bridge.listen", err.message, undefined, true, {
+            code,
+          })
+        );
       }
     });
 
     httpServer.listen(BRIDGE_PORT, "127.0.0.1", () => {
+      if (this.state !== "starting") {
+        httpServer.close((err) => {
+          if (err) process.stderr.write(`Bridge close after abandoned start failed: ${err.message}\n`);
+        });
+        return;
+      }
       this.wss = wss;
       this.httpServer = httpServer;
+      this.state = "ready";
       this.startResolve?.();
+      this.startResolve = null;
+      this.startReject = null;
       process.stderr.write(`ChatMCP bridge listening on port ${BRIDGE_PORT}.\n`);
     });
   }
@@ -127,14 +192,22 @@ export class ExtensionBridge {
     const token = url.searchParams.get("token");
     if (token !== this.token) {
       process.stderr.write("Rejecting WebSocket client — invalid or missing token.\n");
-      try { ws.close(1008, "Invalid auth token"); } catch { /* ignore */ }
+      try {
+        ws.close(1008, "Invalid auth token");
+      } catch (err) {
+        process.stderr.write(`Failed to close invalid WebSocket client: ${String(err)}\n`);
+      }
       return;
     }
 
     // Only one client at a time
     if (this.client && this.client.readyState === WebSocket.OPEN) {
       process.stderr.write("Rejecting extra WebSocket client — one is already connected.\n");
-      try { ws.close(1008, "Another client is already connected"); } catch { /* ignore */ }
+      try {
+        ws.close(1008, "Another client is already connected");
+      } catch (err) {
+        process.stderr.write(`Failed to close duplicate WebSocket client: ${String(err)}\n`);
+      }
       return;
     }
 
@@ -148,8 +221,8 @@ export class ExtensionBridge {
       try {
         const msg = JSON.parse(data.toString()) as ExtensionMessage;
         this.handleExtensionMessage(msg);
-      } catch {
-        // ignore malformed messages
+      } catch (err) {
+        process.stderr.write(`Ignoring malformed extension message: ${String(err)}\n`);
       }
     });
 
@@ -157,7 +230,15 @@ export class ExtensionBridge {
       if (this.client === ws) this.client = null;
       for (const [id, req] of this.pending) {
         clearTimeout(req.timeout);
-        req.reject(new Error("Extension disconnected"));
+        req.reject(
+          this.makeError(
+            "EXTENSION_DISCONNECTED",
+            "bridge.websocket.close",
+            "Extension disconnected before the request completed.",
+            id,
+            true
+          )
+        );
         this.pending.delete(id);
       }
     });
@@ -185,21 +266,57 @@ export class ExtensionBridge {
     this.pending.delete(msg.requestId);
 
     if (msg.type === "error") {
-      req.reject(new Error(msg.message));
+      req.reject(
+        this.makeError(
+          msg.code ?? this.classifyErrorCode(msg.message),
+          msg.stage ?? "extension",
+          msg.message,
+          msg.requestId,
+          msg.retryable ?? this.isRetryableExtensionError(msg.message),
+          msg.details
+        )
+      );
     } else {
       req.resolve(msg);
     }
   }
 
+  private classifyErrorCode(message: string): ChatMcpErrorCode {
+    const lower = message.toLowerCase();
+    if (lower.includes("content script") || lower.includes("receiving end") || lower.includes("could not establish connection")) {
+      return "CONTENT_SCRIPT_MISSING";
+    }
+    if (lower.includes("input") || lower.includes("输入框")) return "INPUT_NOT_FOUND";
+    if (lower.includes("提交确认超时") || lower.includes("submission") || lower.includes("confirm")) {
+      return "SUBMISSION_NOT_CONFIRMED";
+    }
+    if (lower.includes("tab not found")) return "TAB_NOT_FOUND";
+    return "UNKNOWN_ERROR";
+  }
+
+  private isRetryableExtensionError(message: string): boolean {
+    const code = this.classifyErrorCode(message);
+    return code === "CONTENT_SCRIPT_MISSING" || code === "SUBMISSION_NOT_CONFIRMED" || code === "TAB_NOT_FOUND";
+  }
+
   private send(msg: ServerMessage) {
-    if (!this.wss) {
-      throw new Error(
-        "Bridge server is not ready yet — port may be temporarily in use. Try again shortly."
+    if (this.state !== "ready" || !this.wss) {
+      throw this.makeError(
+        "BRIDGE_NOT_READY",
+        "bridge.send",
+        "Bridge server is not ready yet.",
+        msg.requestId,
+        true,
+        { state: this.state }
       );
     }
     if (!this.client || this.client.readyState !== WebSocket.OPEN) {
-      throw new Error(
-        "Chrome extension is not connected. Make sure the ChatMCP extension is installed and enabled."
+      throw this.makeError(
+        "EXTENSION_DISCONNECTED",
+        "bridge.send",
+        "Chrome extension is not connected. Make sure the ChatMCP extension is installed and enabled.",
+        msg.requestId,
+        true
       );
     }
     this.client.send(JSON.stringify(msg));
@@ -214,7 +331,16 @@ export class ExtensionBridge {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error("Request timed out — extension did not respond in time."));
+        reject(
+          this.makeError(
+            "REQUEST_TIMEOUT",
+            "bridge.request",
+            "Request timed out — extension did not respond in time.",
+            requestId,
+            true,
+            { timeoutMs }
+          )
+        );
       }, timeoutMs);
 
       this.pending.set(requestId, {
@@ -234,7 +360,7 @@ export class ExtensionBridge {
   }
 
   isConnected(): boolean {
-    return this.wss !== null && this.client !== null && this.client.readyState === WebSocket.OPEN;
+    return this.state === "ready" && this.wss !== null && this.client !== null && this.client.readyState === WebSocket.OPEN;
   }
 
   async listAiTabs(): Promise<AiTab[]> {
@@ -287,30 +413,44 @@ export class ExtensionBridge {
   }
 
   async close(reason = "ChatMCP bridge is shutting down"): Promise<void> {
-    if (this.closing) return;
-    this.closing = true;
+    if (this.state === "closing") return;
+    this.state = "closing";
     // Reject all pending requests
     for (const req of this.pending.values()) {
       clearTimeout(req.timeout);
-      req.reject(new Error(reason));
+      req.reject(this.makeError("BRIDGE_NOT_READY", "bridge.close", reason, undefined, true));
     }
     this.pending.clear();
     // Close extension WS client
     if (this.client) {
-      try { this.client.terminate(); } catch {}
+      try {
+        this.client.terminate();
+      } catch (err) {
+        process.stderr.write(`Failed to terminate extension client: ${String(err)}\n`);
+      }
       this.client = null;
     }
     // Close WebSocketServer
     if (this.wss) {
       for (const client of this.wss.clients) {
-        try { client.terminate(); } catch {}
+        try {
+          client.terminate();
+        } catch (err) {
+          process.stderr.write(`Failed to terminate WebSocket client: ${String(err)}\n`);
+        }
       }
       await new Promise<void>(resolve => { this.wss!.close(() => resolve()); });
+      this.wss = null;
     }
     // Close HTTP server
     if (this.httpServer) {
-      try { this.httpServer.closeAllConnections?.(); } catch {}
+      try {
+        this.httpServer.closeAllConnections?.();
+      } catch (err) {
+        process.stderr.write(`Failed to close bridge HTTP connections: ${String(err)}\n`);
+      }
       await new Promise<void>(resolve => { this.httpServer!.close(() => resolve()); });
+      this.httpServer = null;
     }
   }
 }

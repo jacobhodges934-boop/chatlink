@@ -417,6 +417,18 @@ function extractPage() {
   };
 }
 
+function isGeneratingNow() {
+  var selectors = ['button[data-testid*="stop" i]','button[aria-label*="stop" i]','button[aria-label*="停止" i]'];
+  for (var i = 0; i < selectors.length; i++) {
+    var els = document.querySelectorAll(selectors[i]);
+    for (var j = 0; j < els.length; j++) {
+      var el = els[j];
+      if (el && el.offsetParent) return true;
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Fallback: full visible text from the main content area
 // ---------------------------------------------------------------------------
@@ -446,6 +458,7 @@ function extractChat() {
           title: document.title,
           messages,
           extractedAt: new Date().toISOString(),
+          isGenerating: isGeneratingNow(),
         };
       } catch (err) {
         return { error: `Extraction failed on ${name}: ${err.message}` };

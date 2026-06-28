@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "http";
 import { z } from "zod";
 import { ExtensionBridge } from "./bridge.js";
+import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,6 +15,42 @@ const HTTP_PORT = 27183;
 const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
 
 const bridge = new ExtensionBridge();
+
+function structuredError(
+  err: unknown,
+  stage: string,
+  fallbackCode: ChatMcpErrorCode = "UNKNOWN_ERROR",
+  retryable = false
+): StructuredError {
+  if (err instanceof ChatMcpError) return err.toJSON();
+  const message = err instanceof Error ? err.message : String(err);
+  return {
+    code: fallbackCode,
+    stage,
+    message,
+    retryable,
+    details: err instanceof Error && err.stack ? { stack: err.stack } : undefined,
+  };
+}
+
+function toolError(err: unknown, stage: string, fallbackCode: ChatMcpErrorCode = "UNKNOWN_ERROR", retryable = false) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(structuredError(err, stage, fallbackCode, retryable), null, 2) }],
+    isError: true,
+  };
+}
+
+function notConnectedError(stage: string) {
+  return toolError(
+    new ChatMcpError({
+      code: "EXTENSION_DISCONNECTED",
+      stage,
+      message: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
+      retryable: true,
+    }),
+    stage
+  );
+}
 
 // ── Tool registration factory ──────────────────────────────────────────────
 // Creates a fully-configured McpServer instance. Called once for stdio mode,
@@ -27,15 +64,7 @@ function registerTools(server: McpServer) {
     {},
     async () => {
       if (!bridge.isConnected()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
-            },
-          ],
-          isError: true,
-        };
+        return notConnectedError("list_ai_tabs.preflight");
       }
 
       try {
@@ -66,10 +95,7 @@ function registerTools(server: McpServer) {
           ],
         };
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return toolError(err, "list_ai_tabs");
       }
     }
   );
@@ -97,39 +123,15 @@ function registerTools(server: McpServer) {
         .describe(
           "If true, return a brief summary instead of the full transcript. Useful for large chats."
         ),
-      afterTimestamp: z
-        .number()
-        .optional()
-        .describe(
-          "If provided, only return messages whose extractedAt is after this Unix timestamp (ms). Use this to get only new messages since a previous call."
-        ),
     },
-    async ({ tabId, maxMessages, summaryOnly, afterTimestamp }) => {
+    async ({ tabId, maxMessages, summaryOnly }) => {
       if (!bridge.isConnected()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
-            },
-          ],
-          isError: true,
-        };
+        return notConnectedError("get_chat_context.preflight");
       }
 
       try {
         const chat = await bridge.getChat(tabId);
         let messages = chat.messages.slice(-(maxMessages ?? 50));
-
-        // Filter by timestamp if requested
-        if (afterTimestamp && afterTimestamp > 0) {
-          messages = messages.filter((m: any) => {
-            const ts = m.extractedAt ? new Date(m.extractedAt).getTime() : 0;
-            return ts > afterTimestamp;
-          });
-        }
-
-        const status = afterTimestamp && messages.length === 0 ? "empty" : "complete";
 
         if (messages.length === 0) {
           return {
@@ -160,11 +162,7 @@ function registerTools(server: McpServer) {
           content: [{ type: "text", text: header + transcript }],
         };
       } catch (err) {
-        const msg = (err as Error).message;
-        return {
-          content: [{ type: "text", text: `Error: ${msg}` }],
-          isError: true,
-        };
+        return toolError(err, "get_chat_context");
       }
     }
   );
@@ -183,15 +181,7 @@ function registerTools(server: McpServer) {
     },
     async ({ tabId }) => {
       if (!bridge.isConnected()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The ChatMCP Chrome extension is not connected.",
-            },
-          ],
-          isError: true,
-        };
+        return notConnectedError("get_page_content.preflight");
       }
 
       try {
@@ -213,10 +203,7 @@ function registerTools(server: McpServer) {
           content: [{ type: "text", text: header + page.text }],
         };
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return toolError(err, "get_page_content");
       }
     }
   );
@@ -228,10 +215,7 @@ function registerTools(server: McpServer) {
     {},
     async () => {
       if (!bridge.isConnected()) {
-        return {
-          content: [{ type: "text", text: "Chrome extension is not connected." }],
-          isError: true,
-        };
+        return notConnectedError("list_tabs.preflight");
       }
 
       try {
@@ -246,10 +230,7 @@ function registerTools(server: McpServer) {
           content: [{ type: "text", text: `${tabs.length} open tab(s):\n\n${lines.join("\n\n")}` }],
         };
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return toolError(err, "list_tabs");
       }
     }
   );
@@ -288,15 +269,7 @@ function registerTools(server: McpServer) {
     },
     async ({ tabId, filterType, includeLinks, maxLinks }) => {
       if (!bridge.isConnected()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
-            },
-          ],
-          isError: true,
-        };
+        return notConnectedError("get_claude_artifacts.preflight");
       }
 
       try {
@@ -344,11 +317,7 @@ function registerTools(server: McpServer) {
           content: [{ type: "text", text: header + sections.join("\n\n---\n\n") }],
         };
       } catch (err) {
-        const msg = (err as Error).message;
-        return {
-          content: [{ type: "text", text: `Error: ${msg}` }],
-          isError: true,
-        };
+        return toolError(err, "get_claude_artifacts");
       }
     }
   );
@@ -398,15 +367,7 @@ function registerTools(server: McpServer) {
     },
     async ({ text, tabId, confirmation }) => {
       if (!bridge.isConnected()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
-            },
-          ],
-          isError: true,
-        };
+        return notConnectedError("send_chat_message.preflight");
       }
 
       try {
@@ -428,10 +389,7 @@ function registerTools(server: McpServer) {
           };
         }
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return toolError(err, "send_chat_message");
       }
     }
   );
@@ -449,7 +407,7 @@ function registerTools(server: McpServer) {
     },
     async ({ platform, task, tabId, context, timeout }) => {
       if (!bridge.isConnected()) {
-        return { content: [{ type: "text", text: "ChatLink extension not connected." }], isError: true };
+        return notConnectedError("delegate_coding_task.preflight");
       }
       try {
         let prompt = task;
@@ -471,18 +429,31 @@ function registerTools(server: McpServer) {
         let sent;
         try {
           sent = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "confirmed");
-        } catch(e) { return { content: [{ type: "text", text: "Send error: "+String(e) }], isError: true }; }
+        } catch(e) {
+          return toolError(e, "delegate_coding_task.send");
+        }
         if (!sent?.success) {
-          return { content: [{ type: "text", text: "Failed to send." }], isError: true };
+          return toolError(
+            new ChatMcpError({
+              code: "SUBMISSION_NOT_CONFIRMED",
+              stage: "delegate_coding_task.send",
+              message: "Failed to send.",
+              retryable: true,
+            }),
+            "delegate_coding_task.send"
+          );
         }
 
         const deadline = Date.now() + Math.max(5, timeout ?? 120) * 1000;
         let lastAssistant = "";
         let lastChangedAt = Date.now();
+        let observedGenerating = false;
+        let sawAssistant = false;
 
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           const chat = await bridge.getChat(targetTab.tabId);
+          if (chat.isGenerating === true) observedGenerating = true;
           const newMessages = chat.messages.slice(baselineCount);
           const newAssistantMessages = newMessages.filter(m => m.role === "assistant" && m.content.trim().length > 0);
           let assistantText = newAssistantMessages.map(m => m.content.trim()).join("\n\n").trim();
@@ -495,6 +466,7 @@ function registerTools(server: McpServer) {
           }
 
           if (!assistantText) continue;
+          sawAssistant = true;
 
           if (assistantText !== lastAssistant) {
             lastAssistant = assistantText;
@@ -502,17 +474,26 @@ function registerTools(server: McpServer) {
             continue;
           }
 
-          if (Date.now() - lastChangedAt >= 6000) {
+          if (observedGenerating && chat.isGenerating === false) {
+            return { content: [{ type: "text", text: lastAssistant }] };
+          }
+
+          if (Date.now() - lastChangedAt >= 10000) {
             return { content: [{ type: "text", text: lastAssistant }] };
           }
         }
 
         return {
-          content: [{ type: "text", text: lastAssistant ? lastAssistant : "Timed out waiting for a new assistant reply." }],
-          isError: !lastAssistant,
+          content: [{ type: "text", text: lastAssistant ? lastAssistant : JSON.stringify({
+            code: "REQUEST_TIMEOUT",
+            stage: "delegate_coding_task.poll",
+            message: "Timed out waiting for a new assistant reply.",
+            retryable: true,
+          }, null, 2) }],
+          isError: !sawAssistant,
         };
       } catch (err) {
-        return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
+        return toolError(err, "delegate_coding_task");
       }
     }
   );
@@ -538,7 +519,10 @@ async function readPortOwner(): Promise<{ service: string; port: number; pid: nu
     const c = JSON.parse(await readFile(OWNER_FILE, "utf8"));
     if (c.service !== "chatmcp" || c.port !== CHATMCP_PORT || !c.pid || !c.parentPid || !c.instanceId) return null;
     return c;
-  } catch { return null; }
+  } catch (err) {
+    process.stderr.write(`[ChatMCP] Ignoring unreadable owner file: ${String(err)}\n`);
+    return null;
+  }
 }
 async function writePortOwner(): Promise<void> {
   await writeFile(OWNER_FILE, JSON.stringify({ service: "chatmcp", port: CHATMCP_PORT, pid: process.pid, parentPid: process.ppid, instanceId, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
@@ -546,7 +530,11 @@ async function writePortOwner(): Promise<void> {
 async function removeOwnPortOwner(): Promise<void> {
   const o = await readPortOwner();
   if (o?.pid !== process.pid || o.instanceId !== instanceId) return;
-  try { await unlink(OWNER_FILE); } catch {}
+  try {
+    await unlink(OWNER_FILE);
+  } catch (err) {
+    process.stderr.write(`[ChatMCP] Failed to remove owner file: ${String(err)}\n`);
+  }
 }
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
 async function waitForProcessExit(pid: number, timeoutMs = 2000): Promise<boolean> {
@@ -558,9 +546,23 @@ async function waitForProcessExit(pid: number, timeoutMs = 2000): Promise<boolea
 async function reclaimStaleChatMcp(): Promise<void> {
   let owner = await readPortOwner();
   if (!owner || owner.pid === process.pid) return;
-  if (!isProcessAlive(owner.pid)) { try { await unlink(OWNER_FILE); } catch {} return; }
+  if (!isProcessAlive(owner.pid)) {
+    try {
+      await unlink(OWNER_FILE);
+    } catch (err) {
+      process.stderr.write(`[ChatMCP] Failed to remove stale owner file: ${String(err)}\n`);
+    }
+    return;
+  }
   for (let i = 0; i < 20; i++) {
-    if (!isProcessAlive(owner.pid)) { try { await unlink(OWNER_FILE); } catch {} return; }
+    if (!isProcessAlive(owner.pid)) {
+      try {
+        await unlink(OWNER_FILE);
+      } catch (err) {
+        process.stderr.write(`[ChatMCP] Failed to remove stale owner file: ${String(err)}\n`);
+      }
+      return;
+    }
     if (!isProcessAlive(owner.parentPid)) break;
     await sleep(100);
     const lo = await readPortOwner();
@@ -568,10 +570,20 @@ async function reclaimStaleChatMcp(): Promise<void> {
   }
   if (isProcessAlive(owner.parentPid)) return; // another session still alive
   process.stderr.write(`[ChatMCP] Auto-reclaiming stale process PID=${owner.pid}\n`);
-  try { process.kill(owner.pid, "SIGTERM"); } catch {}
+  try {
+    process.kill(owner.pid, "SIGTERM");
+  } catch (err) {
+    process.stderr.write(`[ChatMCP] Failed to signal stale process PID=${owner.pid}: ${String(err)}\n`);
+  }
   if (!(await waitForProcessExit(owner.pid, 2000))) throw new Error(`Unable to terminate stale ChatMCP PID=${owner.pid}`);
   const lo = await readPortOwner();
-  if (lo?.instanceId === owner.instanceId) { try { await unlink(OWNER_FILE); } catch {} }
+  if (lo?.instanceId === owner.instanceId) {
+    try {
+      await unlink(OWNER_FILE);
+    } catch (err) {
+      process.stderr.write(`[ChatMCP] Failed to remove reclaimed owner file: ${String(err)}\n`);
+    }
+  }
 }
 
 async function shutdown(reason: string, exitCode = 0): Promise<never> {
@@ -580,8 +592,16 @@ async function shutdown(reason: string, exitCode = 0): Promise<never> {
   if (parentMonitor) { clearInterval(parentMonitor); parentMonitor = undefined; }
   process.stderr.write(`[ChatMCP] Shutting down: ${reason}\n`);
   const force = setTimeout(() => process.exit(exitCode), 1500); force.unref();
-  try { await bridge.close(reason); } catch {}
-  try { await removeOwnPortOwner(); } catch {}
+  try {
+    await bridge.close(reason);
+  } catch (err) {
+    process.stderr.write(`[ChatMCP] Bridge close failed: ${String(err)}\n`);
+  }
+  try {
+    await removeOwnPortOwner();
+  } catch (err) {
+    process.stderr.write(`[ChatMCP] Owner cleanup failed: ${String(err)}\n`);
+  }
   process.exit(exitCode);
 }
 
@@ -599,8 +619,10 @@ parentMonitor.unref();
 
 // ── Main entry ────────────────────────────────────────────────────────────
 async function main() {
-  // Reclaim stale port in background (must not block MCP handshake)
-  Promise.resolve().then(() => reclaimStaleChatMcp().then(() => writePortOwner()).catch(e => process.stderr.write("[ChatMCP] Startup: " + (e?.message||e) + "\n")));
+  await reclaimStaleChatMcp();
+  await bridge.start();
+  await bridge.ensureStarted();
+  await writePortOwner();
 
   // ── Mode selection ──────────────────────────────────────────────────────
   const args = process.argv.slice(2);
@@ -634,7 +656,8 @@ async function main() {
       if (chunks.length > 0) {
         try {
           parsedBody = JSON.parse(Buffer.concat(chunks).toString());
-        } catch {
+        } catch (err) {
+          process.stderr.write(`Invalid MCP HTTP JSON body: ${String(err)}\n`);
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Invalid JSON body");
           return;

@@ -36,7 +36,40 @@ async function diagLog(event, detail) {
       detail: typeof detail === "string" ? detail : JSON.stringify(detail).slice(0, 500),
     });
     await chrome.storage.local.set({ diagnostics: logs, lastConnected: connected, lastUpdate: Date.now() });
-  } catch {}
+  } catch (e) {
+    console.warn("[ChatMCP] Failed to write diagnostics log:", e);
+  }
+}
+
+function classifyErrorCode(message) {
+  const lower = String(message || "").toLowerCase();
+  if (lower.includes("content script") || lower.includes("receiving end") || lower.includes("could not establish connection") || lower.includes("no response from content script")) {
+    return "CONTENT_SCRIPT_MISSING";
+  }
+  if (lower.includes("input") || lower.includes("输入框")) return "INPUT_NOT_FOUND";
+  if (lower.includes("提交确认超时") || lower.includes("submission") || lower.includes("confirm")) {
+    return "SUBMISSION_NOT_CONFIRMED";
+  }
+  if (lower.includes("tab not found")) return "TAB_NOT_FOUND";
+  return "UNKNOWN_ERROR";
+}
+
+function isRetryableErrorCode(code) {
+  return code === "CONTENT_SCRIPT_MISSING" || code === "SUBMISSION_NOT_CONFIRMED" || code === "TAB_NOT_FOUND";
+}
+
+function sendError(requestId, stage, errOrMessage, details) {
+  const message = errOrMessage && errOrMessage.message ? errOrMessage.message : String(errOrMessage);
+  const code = classifyErrorCode(message);
+  send({ type: "error", requestId, code, stage, message, retryable: isRetryableErrorCode(code), details });
+}
+
+function parseHostname(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return "";
+  }
 }
 
 async function clearDiagLog() {
@@ -79,7 +112,14 @@ async function fetchToken() {
 }
 
 async function connect() {
-  if (ws) { try { ws.close(); } catch {} ws = null; }
+  if (ws) {
+    try {
+      ws.close();
+    } catch (e) {
+      await diagLog("ws_close_error", e.message || String(e));
+    }
+    ws = null;
+  }
   await diagLog("connect", "attempting...");
 
   const token = await fetchToken();
@@ -107,7 +147,12 @@ async function connect() {
 
   ws.addEventListener("message", (event) => {
     let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
+    try {
+      msg = JSON.parse(event.data);
+    } catch (e) {
+      diagLog("ws_bad_json", e.message || String(e));
+      return;
+    }
     handleServerMessage(msg);
   });
 
@@ -186,12 +231,11 @@ async function handleListAllTabs(requestId) {
     const tabs = allTabs
       .filter((tab) => tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://"))
       .map((tab) => {
-        let host = "";
-        try { host = new URL(tab.url).hostname; } catch {}
+        const host = parseHostname(tab.url);
         return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: PLATFORM_NAMES[host] ?? "", active: tab.active, windowId: tab.windowId };
-      });
+    });
     send({ type: "all_tabs_result", requestId, tabs });
-  } catch (err) { send({ type: "error", requestId, message: err.message }); }
+  } catch (err) { sendError(requestId, "background.list_all_tabs", err); }
 }
 
 async function handleListAiTabs(requestId) {
@@ -199,13 +243,13 @@ async function handleListAiTabs(requestId) {
     const allTabs = await chrome.tabs.query({});
     const aiTabs = allTabs.filter((tab) => {
       if (!tab.url) return false;
-      try { return AI_HOSTNAMES.has(new URL(tab.url).hostname); } catch { return false; }
+      return AI_HOSTNAMES.has(parseHostname(tab.url));
     }).map((tab) => {
       const host = new URL(tab.url).hostname;
       return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: PLATFORM_NAMES[host] ?? host, active: tab.active, windowId: tab.windowId };
     });
     send({ type: "ai_tabs_result", requestId, tabs: aiTabs });
-  } catch (err) { send({ type: "error", requestId, message: err.message }); }
+  } catch (err) { sendError(requestId, "background.list_ai_tabs", err); }
 }
 
 async function handleGetContent(requestId, targetTabId, mode) {
@@ -217,16 +261,16 @@ async function handleGetContent(requestId, targetTabId, mode) {
       const allTabs = await chrome.tabs.query({});
       const aiTabs = allTabs.filter((t) => {
         if (!t.url) return false;
-        try { return AI_HOSTNAMES.has(new URL(t.url).hostname); } catch { return false; }
+        return AI_HOSTNAMES.has(parseHostname(t.url));
       });
-      if (aiTabs.length === 0) { send({ type: "error", requestId, message: "No AI chat tabs are open." }); return; }
+      if (aiTabs.length === 0) { sendError(requestId, "background.get_content.find_tab", "No AI chat tabs are open."); return; }
       tab = aiTabs.find((t) => t.active) ?? aiTabs[0];
     } else {
       const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (!activeTab) { send({ type: "error", requestId, message: "No active tab found." }); return; }
+      if (!activeTab) { sendError(requestId, "background.get_content.find_tab", "No active tab found."); return; }
       tab = activeTab;
     }
-    if (!tab?.id) { send({ type: "error", requestId, message: "Tab not found." }); return; }
+    if (!tab?.id) { sendError(requestId, "background.get_content.find_tab", "Tab not found."); return; }
 
     async function extract() {
       if (mode === "chat") return chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT" });
@@ -243,18 +287,18 @@ async function handleGetContent(requestId, targetTabId, mode) {
       await sleep(600);
       result = await extract().catch(() => null);
     }
-    if (!result) { send({ type: "error", requestId, message: "No response from content script." }); return; }
-    if (result.error) { send({ type: "error", requestId, message: result.error }); return; }
+    if (!result) { sendError(requestId, "background.get_content.content_script", "No response from content script."); return; }
+    if (result.error) { sendError(requestId, "background.get_content.content_script", result.error); return; }
 
-    const host = (() => { try { return new URL(tab.url).hostname; } catch { return ""; } })();
+    const host = parseHostname(tab.url);
     const platform = PLATFORM_NAMES[host] ?? host ?? "Unknown";
 
     if (result.type === "page") {
       send({ type: "page_result", requestId, content: { tabId: tab.id, platform, url: result.url, title: result.title, text: result.text, extractedAt: result.extractedAt } });
     } else {
-      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt } });
+      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating } });
     }
-  } catch (err) { send({ type: "error", requestId, message: err.message }); }
+  } catch (err) { sendError(requestId, "background.get_content", err); }
 }
 
 async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks) {
@@ -263,13 +307,13 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
     if (targetTabId) { tab = await chrome.tabs.get(targetTabId); }
     else {
       const allTabs = await chrome.tabs.query({});
-      const claudeTabs = allTabs.filter((t) => { if (!t.url) return false; try { return new URL(t.url).hostname === "claude.ai"; } catch { return false; } });
-      if (claudeTabs.length === 0) { send({ type: "error", requestId, message: "No claude.ai tabs are open." }); return; }
+      const claudeTabs = allTabs.filter((t) => t.url && parseHostname(t.url) === "claude.ai");
+      if (claudeTabs.length === 0) { sendError(requestId, "background.get_artifacts.find_tab", "No claude.ai tabs are open."); return; }
       tab = claudeTabs.find((t) => t.active) ?? claudeTabs[0];
     }
-    if (!tab?.id) { send({ type: "error", requestId, message: "Tab not found." }); return; }
-    let hostname = ""; try { hostname = new URL(tab.url).hostname; } catch {}
-    if (hostname !== "claude.ai") { send({ type: "error", requestId, message: "Tab is on " + hostname + ", not claude.ai." }); return; }
+    if (!tab?.id) { sendError(requestId, "background.get_artifacts.find_tab", "Tab not found."); return; }
+    const hostname = parseHostname(tab.url);
+    if (hostname !== "claude.ai") { sendError(requestId, "background.get_artifacts.find_tab", "Tab is on " + hostname + ", not claude.ai."); return; }
 
     let result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_ARTIFACTS", includeLinks, maxLinks }).catch(() => null);
     if (!result && !tab.active) {
@@ -278,16 +322,16 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
       await sleep(600);
       result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_ARTIFACTS", includeLinks, maxLinks }).catch(() => null);
     }
-    if (!result) { send({ type: "error", requestId, message: "No response from content script." }); return; }
-    if (result.error) { send({ type: "error", requestId, message: result.error }); return; }
+    if (!result) { sendError(requestId, "background.get_artifacts.content_script", "No response from content script."); return; }
+    if (result.error) { sendError(requestId, "background.get_artifacts.content_script", result.error); return; }
     send({ type: "artifacts_result", requestId, content: { tabId: tab.id, platform: "Claude", url: result.url, title: result.title, artifacts: result.artifacts, count: result.count, extractedAt: result.extractedAt, note: result.note ?? null } });
-  } catch (err) { send({ type: "error", requestId, message: err.message }); }
+  } catch (err) { sendError(requestId, "background.get_artifacts", err); }
 }
 
 async function handleSendMessage(requestId, targetTabId, text, platform, operationId, confirmation) {
   try {
     if (!text || typeof text !== "string" || text.trim().length === 0) {
-      send({ type: "error", requestId, message: "No text provided to send." });
+      sendError(requestId, "background.send_message.validate", "No text provided to send.");
       return;
     }
 
@@ -301,19 +345,19 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     if (targetTabId) {
       tab = await chrome.tabs.get(targetTabId);
       if (!tab?.url || !AI_HOSTNAMES.has(new URL(tab.url).hostname)) {
-        send({ type: "error", requestId, message: "Target tab is not an AI chat page." }); return;
+        sendError(requestId, "background.send_message.find_tab", "Target tab is not an AI chat page."); return;
       }
     } else {
       const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      tab = tabs.find(t => { try { return AI_HOSTNAMES.has(new URL(t.url).hostname); } catch { return false; } });
+      tab = tabs.find(t => AI_HOSTNAMES.has(parseHostname(t.url)));
       if (!tab) {
-        send({ type: "error", requestId, message: "No active AI chat tab. Open ChatGPT/Gemini/Claude first." }); return;
+        sendError(requestId, "background.send_message.find_tab", "No active AI chat tab. Open ChatGPT/Gemini/Claude first."); return;
       }
     }
-    if (!tab?.id) { send({ type: "error", requestId, message: "Tab not found." }); return; }
+    if (!tab?.id) { sendError(requestId, "background.send_message.find_tab", "Tab not found."); return; }
 
     if (!platform) {
-      try { platform = PLATFORM_NAMES[new URL(tab.url).hostname]?.toLowerCase(); } catch {}
+      platform = PLATFORM_NAMES[parseHostname(tab.url)]?.toLowerCase();
     }
 
     // Serial queue per tab — no auto-focus (just send via content script)
@@ -335,11 +379,11 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     });
 
     if (!result) {
-      send({ type: "error", requestId, message: "No response from content script. Refresh the chat page and try again." });
+      sendError(requestId, "background.send_message.content_script", "No response from content script. Refresh the chat page and try again.");
       return;
     }
     if (result.error) {
-      send({ type: "error", requestId, message: result.error });
+      sendError(requestId, "background.send_message.content_script", result.error);
       return;
     }
 
@@ -347,7 +391,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     if (operationId) setDedupResult(operationId, r);
     send({ type: "send_message_result", requestId, ...r });
   } catch (err) {
-    send({ type: "error", requestId, message: err.message });
+    sendError(requestId, "background.send_message", err);
   }
 }
 
