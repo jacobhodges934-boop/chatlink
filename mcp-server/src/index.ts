@@ -452,73 +452,60 @@ function registerTools(server: McpServer) {
         return { content: [{ type: "text", text: "ChatLink extension not connected." }], isError: true };
       }
       try {
-        // Find target tab (try all matching tabs, prefer ones that respond)
+        // Build prompt
+        let prompt = task;
+        if (context) prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
+
+        // Find working tab — try each candidate until send succeeds
         const tabs = await bridge.listAiTabs();
         const candidates = tabId
           ? tabs.filter(t => t.tabId === tabId)
           : tabs.filter(t => (t.platform || "").toLowerCase() === platform);
         if (candidates.length === 0) {
-          return { content: [{ type: "text", text: "No " + platform + " tab found. Open it in Chrome first." }], isError: true };
+          return { content: [{ type: "text", text: "No " + platform + " tab found." }], isError: true };
         }
 
-        // Build prompt with optional context
-        let prompt = task;
-        if (context) {
-          prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
-        }
-
-        // Count existing messages before sending
         let targetTab = candidates[0];
         let beforeCount = 0;
-        for (const t of candidates.slice(0, 3)) {
+        let sendOk = false;
+        for (const t of candidates.slice(0, 5)) {
           try {
             const chat = await bridge.getChat(t.tabId);
             beforeCount = chat.messages.filter((m: any) => m.role === "assistant").length;
-            targetTab = t;
-            break;
+            const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
+            if (r.success) { targetTab = t; sendOk = true; break; }
           } catch { continue; }
         }
-
-        // Send message
-        const sendResult = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "dispatch");
-        if (!sendResult.success) {
-          return { content: [{ type: "text", text: "Failed to send message." }], isError: true };
+        if (!sendOk) {
+          return { content: [{ type: "text", text: "Failed to send to any " + platform + " tab." }], isError: true };
         }
 
-        // Poll for new assistant messages until response stabilizes
+        // Poll for response stabilization
         const deadline = Date.now() + (timeout! * 1000);
         let lastText = "";
         while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 2500));
+          await new Promise((r) => setTimeout(r, 3000));
           try {
             const chat = await bridge.getChat(targetTab.tabId);
-            const allMsgs = chat.messages.filter((m: any) => m.role === "assistant");
-            const newMsgs = allMsgs.slice(beforeCount);
+            const newMsgs = chat.messages.filter((m: any) => m.role === "assistant").slice(beforeCount);
             if (newMsgs.length > 0) {
               const combined = newMsgs.map((m: any) => m.content).join("\n\n");
-              if (combined.length > 20) {
-                // Wait to check if response stabilized
+              if (combined.length > 10) {
                 const prevLen = combined.length;
                 await new Promise((r) => setTimeout(r, 3000));
                 const recheck = await bridge.getChat(targetTab.tabId);
                 const recheckNew = recheck.messages.filter((m: any) => m.role === "assistant").slice(beforeCount);
                 const recheckText = recheckNew.map((m: any) => m.content).join("\n\n");
                 if (recheckText.length === prevLen && recheckText.length > 0) {
-                  return {
-                    content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }],
-                  };
+                  return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }] };
                 }
                 lastText = recheckText;
               }
             }
           } catch { continue; }
         }
-
-        // Timeout with partial content
-        if (lastText) {
-          return { content: [{ type: "text", text: "## Partial response (timeout)\n\n---\n\n" + lastText }] };
-        }
-        return { content: [{ type: "text", text: "Timeout: no response within " + timeout + "s." }], isError: true };
+        if (lastText) return { content: [{ type: "text", text: "## Partial (timeout)\n\n---\n\n" + lastText }] };
+        return { content: [{ type: "text", text: "Timeout: no response in " + timeout + "s." }], isError: true };
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
       }
