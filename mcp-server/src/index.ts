@@ -466,12 +466,13 @@ function registerTools(server: McpServer) {
         }
 
         let targetTab = candidates[0];
-        let beforeCount = 0;
+        let lastContent = "";
         let sendOk = false;
         for (const t of candidates.slice(0, 5)) {
           try {
             const chat = await bridge.getChat(t.tabId);
-            beforeCount = chat.messages.filter((m: any) => m.role === "assistant").length;
+            const assists = chat.messages.filter((m: any) => m.role === "assistant");
+            lastContent = assists.length > 0 ? (assists[assists.length - 1].content || "") : "";
             const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
             if (r.success) { targetTab = t; sendOk = true; break; }
           } catch { continue; }
@@ -480,31 +481,31 @@ function registerTools(server: McpServer) {
           return { content: [{ type: "text", text: "Failed to send to any " + platform + " tab." }], isError: true };
         }
 
-        // Poll for response stabilization
+        // Poll until a new assistant message appears with different content
         const deadline = Date.now() + (timeout! * 1000);
-        let lastText = "";
+        let bestText = "";
         while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 3000));
+          await new Promise((r) => setTimeout(r, 4000));
           try {
             const chat = await bridge.getChat(targetTab.tabId);
-            const newMsgs = chat.messages.filter((m: any) => m.role === "assistant").slice(beforeCount);
-            if (newMsgs.length > 0) {
-              const combined = newMsgs.map((m: any) => m.content).join("\n\n");
-              if (combined.length > 10) {
-                const prevLen = combined.length;
-                await new Promise((r) => setTimeout(r, 3000));
-                const recheck = await bridge.getChat(targetTab.tabId);
-                const recheckNew = recheck.messages.filter((m: any) => m.role === "assistant").slice(beforeCount);
-                const recheckText = recheckNew.map((m: any) => m.content).join("\n\n");
-                if (recheckText.length === prevLen && recheckText.length > 0) {
-                  return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + recheckText }] };
-                }
-                lastText = recheckText;
+            const assists = chat.messages.filter((m: any) => m.role === "assistant");
+            if (assists.length === 0) continue;
+            const latest = assists[assists.length - 1].content || "";
+            if (latest.length > 10 && latest !== lastContent) {
+              // New message found, wait for stabilization
+              const curLen = latest.length;
+              await new Promise((r) => setTimeout(r, 4000));
+              const recheck = await bridge.getChat(targetTab.tabId);
+              const ra = recheck.messages.filter((m: any) => m.role === "assistant");
+              const rlatest = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
+              if (rlatest.length === curLen) {
+                return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + rlatest }] };
               }
+              bestText = rlatest;
             }
           } catch { continue; }
         }
-        if (lastText) return { content: [{ type: "text", text: "## Partial (timeout)\n\n---\n\n" + lastText }] };
+        if (bestText) return { content: [{ type: "text", text: "## Partial (timeout)\n\n---\n\n" + bestText }] };
         return { content: [{ type: "text", text: "Timeout: no response in " + timeout + "s." }], isError: true };
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
