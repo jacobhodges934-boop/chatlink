@@ -452,11 +452,10 @@ function registerTools(server: McpServer) {
         return { content: [{ type: "text", text: "ChatLink extension not connected." }], isError: true };
       }
       try {
-        // Build prompt
         let prompt = task;
         if (context) prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
 
-        // Find working tab — try each candidate until send succeeds
+        // Find working tab
         const tabs = await bridge.listAiTabs();
         const candidates = tabId
           ? tabs.filter(t => t.tabId === tabId)
@@ -465,48 +464,44 @@ function registerTools(server: McpServer) {
           return { content: [{ type: "text", text: "No " + platform + " tab found." }], isError: true };
         }
 
-        let targetTab = candidates[0];
-        let beforeCount = 0;
+        let workingTab = candidates[0];
         for (const t of candidates.slice(0, 5)) {
           try {
-            const chat = await bridge.getChat(t.tabId);
-            beforeCount = chat.messages.filter((m: any) => m.role === "assistant").length;
             const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
-            if (r.success) { targetTab = t; break; }
+            if (r.success) { workingTab = t; break; }
           } catch { continue; }
-        }
-        if (beforeCount < 0) {
-          return { content: [{ type: "text", text: "Failed to send to any " + platform + " tab." }], isError: true };
         }
 
-        // Poll until assistant message count increases (stable detection)
+        // Simple wait-then-read approach: poll with progressive sleep until response stable
         const deadline = Date.now() + (timeout! * 1000);
-        let bestText = "";
+        let prevLength = 0;
         while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 4000));
+          const wait = Math.min(5000, Math.max(2000, Math.floor((deadline - Date.now()) / 6)));
+          await new Promise(r => setTimeout(r, wait));
           try {
-            const chat = await bridge.getChat(targetTab.tabId);
-            const assistCount = chat.messages.filter((m: any) => m.role === "assistant").length;
-            if (assistCount > beforeCount) {
+            const chat = await bridge.getChat(workingTab.tabId);
+            const total = chat.messages.length;
+            if (total === prevLength && total > 0) {
+              // Stable — return last assistant
               const assists = chat.messages.filter((m: any) => m.role === "assistant");
-              const latest = assists[assists.length - 1].content || "";
-              const totalCount = chat.messages.length;
-              // Check stabilization
-              await new Promise((r) => setTimeout(r, 4000));
-              const recheck = await bridge.getChat(targetTab.tabId);
-              const ra = recheck.messages.filter((m: any) => m.role === "assistant");
-              if (ra.length === assistCount && recheck.messages.length === totalCount) {
-                const rlatest = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
-                if (rlatest.length > 10) {
-                  return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + rlatest }] };
+              if (assists.length > 0) {
+                const last = assists[assists.length - 1].content;
+                if (last.length > 10) {
+                  return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + last }] };
                 }
               }
-              bestText = ra.length > 0 ? (ra[ra.length - 1].content || "") : "";
-              beforeCount = ra.length;
             }
+            prevLength = total;
           } catch { continue; }
         }
-        if (bestText) return { content: [{ type: "text", text: "## Partial (timeout)\n\n---\n\n" + bestText }] };
+        // Last attempt
+        try {
+          const chat = await bridge.getChat(workingTab.tabId);
+          const assists = chat.messages.filter((m: any) => m.role === "assistant");
+          if (assists.length > 0) {
+            return { content: [{ type: "text", text: "## Response (final)\n\n---\n\n" + assists[assists.length - 1].content }] };
+          }
+        } catch {}
         return { content: [{ type: "text", text: "Timeout: no response in " + timeout + "s." }], isError: true };
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
