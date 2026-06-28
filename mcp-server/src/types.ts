@@ -53,7 +53,8 @@ export type ServerMessage =
   | { type: "list_all_tabs"; requestId: string }
   | { type: "get_chat"; requestId: string; tabId?: number }
   | { type: "get_page"; requestId: string; tabId?: number }
-  | { type: "get_artifacts"; requestId: string; tabId?: number; includeLinks?: boolean; maxLinks?: number };
+  | { type: "get_artifacts"; requestId: string; tabId?: number; includeLinks?: boolean; maxLinks?: number }
+  | { type: "send_message"; requestId: string; tabId?: number; text: string; platform?: string; operationId?: string; confirmation?: string };
 
 // Messages from extension → MCP server
 export type ExtensionMessage =
@@ -64,4 +65,5 @@ export type ExtensionMessage =
   | { type: "chat_result"; requestId: string; content: ChatContent }
   | { type: "page_result"; requestId: string; content: PageContent }
   | { type: "artifacts_result"; requestId: string; content: ArtifactsContent }
-  | { type: "error"; requestId: string; message: string };
+  | { type: "error"; requestId: string; message: string }
+  | { type: "send_message_result"; requestId: string; success: boolean; sent?: boolean; platform?: string; method?: string };

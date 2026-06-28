@@ -1,6 +1,6 @@
 # ChatLink
 
-让 Claude Code 直接读写 ChatGPT、Gemini、Claude、DeepSeek、Grok、Mistral、Perplexity 的网页对话。
+让 Claude Code 直接读写 AI 网页对话。读取支持 7 平台（ChatGPT、Claude、Gemini、Grok、DeepSeek、Mistral、Perplexity），发送支持 5 平台（ChatGPT、Gemini、Claude、DeepSeek、Grok）。
 
 你的浏览器里开着 AI 聊天页面，Claude Code 通过 ChatLink 自动读写——不用复制粘贴，不烧 API 费用，吃的是你已有的网页订阅额度。
 

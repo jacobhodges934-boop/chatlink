@@ -174,7 +174,7 @@ async function handleServerMessage(msg) {
     case "get_chat":        return handleGetContent(msg.requestId, msg.tabId, "chat");
     case "get_page":        return handleGetContent(msg.requestId, msg.tabId, "page");
     case "get_artifacts":   return handleGetArtifacts(msg.requestId, msg.tabId, msg.includeLinks ?? false, msg.maxLinks ?? 10);
-    case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId);
+    case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId, msg.confirmation);
     default:
       console.warn("[ChatMCP] Unknown message type:", msg.type);
   }
@@ -284,7 +284,7 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
   } catch (err) { send({ type: "error", requestId, message: err.message }); }
 }
 
-async function handleSendMessage(requestId, targetTabId, text, platform, operationId) {
+async function handleSendMessage(requestId, targetTabId, text, platform, operationId, confirmation) {
   try {
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       send({ type: "error", requestId, message: "No text provided to send." });
@@ -323,6 +323,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
           type: "SEND_MESSAGE",
           text: text.trim(),
           platform,
+          confirmation: confirmation ?? "confirmed",
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
