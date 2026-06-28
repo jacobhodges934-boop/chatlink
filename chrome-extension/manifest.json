@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "ChatMCP",
+  "name": "ChatLink",
   "version": "1.0.0",
   "description": "Bridge your AI browser chats (ChatGPT, Claude, Gemini, Grok, DeepSeek, Mistral, Perplexity) into Claude Code via MCP. Pull full conversation context with one command.",
   "permissions": [
@@ -19,7 +19,7 @@
   },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "ChatMCP",
+    "default_title": "ChatLink",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
