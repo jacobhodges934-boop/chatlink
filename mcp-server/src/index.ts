@@ -498,14 +498,16 @@ process.once("unhandledRejection", (reason) => { process.stderr.write(`Rejection
 parentMonitor = setInterval(() => { if (!isProcessAlive(process.ppid)) void shutdown("parent process exited"); }, 1000);
 parentMonitor.unref();
 
-// ── Startup: reclaim stale port in background (must not block MCP handshake)
-Promise.resolve().then(() => reclaimStaleChatMcp().then(() => writePortOwner()).catch(e => process.stderr.write("[ChatMCP] Startup: " + (e?.message||e) + "\n")));
+// ── Main entry ────────────────────────────────────────────────────────────
+async function main() {
+  // Reclaim stale port in background (must not block MCP handshake)
+  Promise.resolve().then(() => reclaimStaleChatMcp().then(() => writePortOwner()).catch(e => process.stderr.write("[ChatMCP] Startup: " + (e?.message||e) + "\n")));
 
-// ── Mode selection ─────────────────────────────────────────────────────────
-const args = process.argv.slice(2);
-const httpMode = args.includes("--http");
+  // ── Mode selection ──────────────────────────────────────────────────────
+  const args = process.argv.slice(2);
+  const httpMode = args.includes("--http");
 
-if (httpMode) {
+  if (httpMode) {
   // ── HTTP mode: serves multiple clients (OpenCode, Copilot, Cursor, etc.) ──
   // Uses MCP Streamable HTTP transport. Each request is handled statelessly so
   // any number of clients can connect simultaneously.
@@ -561,4 +563,7 @@ if (httpMode) {
     `ChatMCP MCP server running. Waiting for Chrome extension on port 27182.\n` +
     `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
   );
+  }
 }
+
+void main().catch(err => { process.stderr.write("Fatal: " + (err?.message||err) + "\n"); void shutdown("main failed", 1); });
