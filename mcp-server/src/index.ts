@@ -461,40 +461,41 @@ function registerTools(server: McpServer) {
         if (candidates.length === 0) {
           return { content: [{ type: "text", text: "No " + platform + " tab found." }], isError: true };
         }
+        // Send to first working candidate
         let targetTab = candidates[0];
+        let sent = false;
         for (const t of candidates.slice(0, 3)) {
           try {
             const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
-            if (r.success) { targetTab = t; break; }
+            if (r && r.success) { targetTab = t; sent = true; break; }
           } catch { continue; }
         }
-        // Simple approach: wait for GPT to respond, then return last assistant.
-        // DOM virtualization makes snapshot/comparison approaches unreliable.
-        const deadline = Date.now() + (timeout! * 1000);
-        await new Promise(r => setTimeout(r, Math.min(10000, timeout! * 1000 * 0.3)));
-        let lastText = "";
-        while (Date.now() < deadline) {
-          try {
-            const chat = await bridge.getChat(targetTab.tabId);
-            const assists = chat.messages.filter((m: any) => m.role === "assistant");
-            if (assists.length > 0) {
-              const current = assists[assists.length - 1].content || "";
-              if (current.length > 10 && current === lastText) {
-                return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + current }] };
-              }
-              lastText = current;
-            }
-          } catch {}
-          await new Promise(r => setTimeout(r, 3000));
+        if (!sent) {
+          return { content: [{ type: "text", text: "Failed to send to any " + platform + " tab." }], isError: true };
         }
-        if (lastText) return { content: [{ type: "text", text: "## Partial response\n\n---\n\n" + lastText }] };
-        return { content: [{ type: "text", text: "Timeout: no response." }], isError: true };
+        // Wait for AI to respond, then return the last assistant message
+        const waitMs = Math.min((timeout! * 1000 * 0.7), 30000);
+        await new Promise(r => setTimeout(r, waitMs));
+        try {
+          const chat = await bridge.getChat(targetTab.tabId);
+          const assists = chat.messages.filter((m: any) => m.role === "assistant");
+          if (assists.length > 0) {
+            const last = assists[assists.length - 1].content || "";
+            if (last.length > 5) {
+              return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + last }] };
+            }
+          }
+          return { content: [{ type: "text", text: "Timeout: no assistant reply in " + waitMs/1000 + "s." }], isError: true };
+        } catch (e) {
+          return { content: [{ type: "text", text: "Error reading response: " + ((e as Error).message || String(e)) }], isError: true };
+        }
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
       }
     }
   );
 }
+// ── Port ownership & lifecycle management
 // ── Port ownership & lifecycle management
 // ── Port ownership & lifecycle management ──────────────────────────────────
 const CHATMCP_PORT = 27182;
