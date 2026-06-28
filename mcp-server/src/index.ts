@@ -454,42 +454,6 @@ function registerTools(server: McpServer) {
       try {
         let prompt = task;
         if (context) prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
-        const normalize = (value: string | undefined): string => (value ?? "").replace(/\s+/g, " ").trim();
-        const promptText = normalize(prompt);
-        const signature = (m: { role: string; content: string }): string => `${m.role}:${normalize(m.content)}`;
-        const lastAssistantAfterPrompt = (messages: Array<{ role: string; content: string }>): string | null => {
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i];
-            if (m.role !== "user") continue;
-            const text = normalize(m.content);
-            if (text === promptText || promptText.includes(text) || text.includes(promptText.slice(0, 500))) {
-              const assistants = messages.slice(i + 1).filter((candidate) => candidate.role === "assistant");
-              const last = assistants.at(-1);
-              return last ? last.content : null;
-            }
-          }
-          return null;
-        };
-        const detectNewAssistant = (
-          messages: Array<{ role: string; content: string }>,
-          baselineAssistantCount: number,
-          baselineSignatures: Set<string>
-        ): string | null => {
-          const afterPrompt = lastAssistantAfterPrompt(messages);
-          if (afterPrompt && normalize(afterPrompt).length > 10) return afterPrompt;
-
-          const assistants = messages.filter((m) => m.role === "assistant");
-          const appended = assistants.slice(baselineAssistantCount).filter((m) => normalize(m.content).length > 10);
-          const lastAppended = appended.at(-1);
-          if (lastAppended) return lastAppended.content;
-
-          const changed = assistants
-            .filter((m) => normalize(m.content).length > 10 && !baselineSignatures.has(signature(m)))
-            .at(-1);
-          return changed?.content ?? null;
-        };
-
-        // Find working tab
         const tabs = await bridge.listAiTabs();
         const candidates = tabId
           ? tabs.filter(t => t.tabId === tabId)
@@ -497,63 +461,41 @@ function registerTools(server: McpServer) {
         if (candidates.length === 0) {
           return { content: [{ type: "text", text: "No " + platform + " tab found." }], isError: true };
         }
-
-        let workingTab = candidates[0];
-        let baselineAssistantCount = 0;
-        let baselineSignatures = new Set<string>();
-        let sent = false;
-        for (const t of candidates.slice(0, 5)) {
+        let targetTab = candidates[0];
+        for (const t of candidates.slice(0, 3)) {
           try {
-            const before = await bridge.getChat(t.tabId).catch(() => null);
-            const beforeMessages = before?.messages ?? [];
             const r = await bridge.sendChatMessage(prompt, t.tabId, platform, "dispatch");
-            if (r.success) {
-              workingTab = t;
-              baselineAssistantCount = beforeMessages.filter((m: any) => m.role === "assistant").length;
-              baselineSignatures = new Set(beforeMessages.map((m: any) => signature(m)));
-              sent = true;
-              break;
-            }
+            if (r.success) { targetTab = t; break; }
           } catch { continue; }
         }
-        if (!sent) {
-          return { content: [{ type: "text", text: "Failed to send task to any " + platform + " tab." }], isError: true };
-        }
-
-        // Poll for assistant content that is new relative to the pre-send snapshot.
+        // Simple approach: wait for GPT to respond, then return last assistant.
+        // DOM virtualization makes snapshot/comparison approaches unreliable.
         const deadline = Date.now() + (timeout! * 1000);
-        let lastCandidate = "";
-        let lastChangedAt = Date.now();
-        const stableMs = 3000;
+        await new Promise(r => setTimeout(r, Math.min(10000, timeout! * 1000 * 0.3)));
+        let lastText = "";
         while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 1500));
           try {
-            const chat = await bridge.getChat(workingTab.tabId);
-            const candidate = detectNewAssistant(chat.messages, baselineAssistantCount, baselineSignatures);
-            if (!candidate) continue;
-            const normalizedCandidate = normalize(candidate);
-            if (normalizedCandidate !== normalize(lastCandidate)) {
-              lastCandidate = candidate;
-              lastChangedAt = Date.now();
-              continue;
+            const chat = await bridge.getChat(targetTab.tabId);
+            const assists = chat.messages.filter((m: any) => m.role === "assistant");
+            if (assists.length > 0) {
+              const current = assists[assists.length - 1].content || "";
+              if (current.length > 10 && current === lastText) {
+                return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + current }] };
+              }
+              lastText = current;
             }
-            if (Date.now() - lastChangedAt >= stableMs) {
-              return { content: [{ type: "text", text: "## Response from " + platform + "\n\n---\n\n" + lastCandidate.trim() }] };
-            }
-          } catch { continue; }
+          } catch {}
+          await new Promise(r => setTimeout(r, 3000));
         }
-        // Last attempt
-        if (lastCandidate) {
-          return { content: [{ type: "text", text: "## Response from " + platform + " (last observed)\n\n---\n\n" + lastCandidate.trim() }] };
-        }
-        return { content: [{ type: "text", text: "Timeout: no response in " + timeout + "s." }], isError: true };
+        if (lastText) return { content: [{ type: "text", text: "## Partial response\n\n---\n\n" + lastText }] };
+        return { content: [{ type: "text", text: "Timeout: no response." }], isError: true };
       } catch (err) {
         return { content: [{ type: "text", text: "Error: " + ((err as Error).message || String(err)) }], isError: true };
       }
     }
   );
 }
-
+// ── Port ownership & lifecycle management
 // ── Port ownership & lifecycle management ──────────────────────────────────
 const CHATMCP_PORT = 27182;
 const OWNER_FILE = join(tmpdir(), `chatmcp-${CHATMCP_PORT}.owner.json`);
