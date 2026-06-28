@@ -82,7 +82,7 @@ chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_PERIOD_MINUTE
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
-  diagLog("alarm", "keepalive fired, connected=" + connected);
+  // Only log state changes, not every keepalive (~4800/day saved)
   if (!connected) {
     connect();
   } else if (ws && ws.readyState === WebSocket.OPEN) {

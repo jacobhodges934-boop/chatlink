@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Edit(mcp-server/src/**)",
+      "Edit(mcp-server/scripts/**)",
+      "Edit(fix-delegate.mjs)",
+      "Bash(npm run build)",
+      "Bash(cd mcp-server && npm run build)",
+      "Bash(node fix-delegate.mjs)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(pwd)",
+      "Bash(pwsh -NoProfile -File ./mcp-server/scripts/restart-mcp.ps1)",
+      "Bash(node -e:*)"
+    ],
+    "deny": [
+      "Edit(.env*)",
+      "Edit(**/.env*)",
+      "Edit(**/*.pem)",
+      "Edit(**/*.key)",
+      "Bash(rm -rf:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+Implement the following plan to fix ChatGPT stop button detection in our Chrome extension.
+
+## File to modify
+chrome-extension/content-scripts/extractor.js
+
+## Background
+`isGeneratingNow()` always returns false for ChatGPT because ChatGPT reuses `button[data-testid="send-button"]` as the stop button during generation — it changes the inner SVG from a send-arrow to a stop-square but keeps the same data-testid. Our inverse signal check finds this button (visible + enabled) and incorrectly returns false ("not generating").
+
+## Edit 1: Expand DEFAULT_STOP_SEL
+Find DEFAULT_STOP_SEL array (~line 975). Add these selectors for ChatGPT's reused send-button-as-stop:
+- button[data-testid="send-button"][aria-label*="stop" i]
+- button[data-testid="send-button"][aria-label*="停止" i]
+- button[data-testid="send-button"][title*="stop" i]
+- button[data-testid="send-button"] [data-icon*="stop" i]
+- button[data-testid="send-button"] svg[aria-label*="stop" i]
+
+## Edit 2: Add helper functions after vis()
+After the vis() function (~line 949), add these helpers:
+
+function isChatGptPage() — returns true if hostname is chatgpt.com or chat.openai.com
+
+function hasStopIcon(button) — checks if a button[data-testid="send-button"] has a stop SVG icon. Returns true if:
+- The SVG's aria-label contains "stop" or "停止"
+- OR the SVG contains a visible <rect> element (w>=6, h>=6) indicating a stop square (send arrow uses <path>, not <rect>)
+
+function countAssistantTurns() — counts article[data-testid^="conversation-turn"] elements that contain [data-message-author-role="assistant"]. Only on ChatGPT pages.
+
+var _assistantTurnState = { primed: false, count: 0, pulse: false };
+
+function primeAssistantTurnProbe() — records the current assistant turn count before sending a message. Only on ChatGPT pages.
+
+function consumeAssistantTurnPulse() — checks if the assistant turn count increased since last prime/consume. Returns true once per increase (one-pulse), then resets. Only on ChatGPT pages.
+
+All helpers must use `var` not `let/const`, `function` declarations not arrows. Match existing 2-space indent style. Use `vis()` for visibility checks.
+
+## Edit 3: Replace isGeneratingNow()
+Replace the entire isGeneratingNow() function with one that:
+
+Step 1: Calls consumeAssistantTurnPulse() — stores result
+Step 2: Iterates DEFAULT_STOP_SEL with querySelectorAll + vis() — if any visible, return true
+Step 3: ChatGPT-specific check:
+  - Find button[data-testid="send-button"]
+  - If visible, not disabled, AND hasStopIcon() → return true (it's a stop button in disguise)
+  - If visible, not disabled, NO stop icon → this is ambiguous for ChatGPT, SKIP the inverse signal (don't return false)
+  - If send button is disabled or missing → use normal inverse signal check (cfg.send selectors that are visible+enabled → return false)
+Step 4: Non-ChatGPT: original inverse signal logic unchanged
+Step 5: Check for spinners/loading indicators
+Step 6: If step 1's turnPulse was true → return true
+
+## Edit 4: Fix waitSubmission() scope and visibility
+In waitSubmission() (~line 1001):
+- Change: `var root = input.closest('[role="main"]') ...` → `var root = document.body || document.documentElement;`
+- Add: `var assistantTurnsBeforeSend = isChatGptPage() ? countAssistantTurns() : 0;`
+- Change stop button detection: `root.querySelector(...)` → `document.querySelector(...)`, and `offsetParent` → `vis()`
+- Add fallback: if isChatGptPage() and assistant turns increased → finish(true, "generation_started")
+
+## Edit 5: Prime probe before send
+In sendMessage(), find the line `if (confirmation === "dispatch")` and insert `primeAssistantTurnProbe();` on the line before it.
+
+## Edit 6: Observer root reference
+In waitSubmission(), if the MutationObserver uses a variable named `root` for observation, rename it to use the new root from Edit 4.
+
+## Verification
+Run: cd mcp-server && npm run build
+Must pass with zero errors.
+
+Important style rules:
+- Use `var` for all variable declarations (browser JS, no let/const)
+- Use `function name() {}` not arrow functions
+- 2-space indentation
+- Use `vis()` not `offsetParent` for visibility
+- Keep existing code structure intact, only change what's specified

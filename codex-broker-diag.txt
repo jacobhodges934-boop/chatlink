@@ -1,0 +1,21 @@
+Diagnose why the codex:codex-rescue agent forwarding isn't reaching real Codex.
+
+The codex-plugin-cc is installed at:
+C:\Users\GXP\.claude\plugins\marketplaces\openai-codex\plugins\codex\
+
+The forwarding chain:
+1. Claude Code calls codex:codex-rescue agent (agents/codex-rescue.md)
+2. Agent runs codex-companion.mjs (scripts/codex-companion.mjs)
+3. codex-companion uses lib/codex.mjs which has getSessionRuntimeStatus(), getCodexAvailability()
+4. It connects via BROKER_ENDPOINT_ENV or loadBrokerSession() to a Codex AppServerClient
+5. If broker session exists, forwards task to Codex. If not... what happens?
+
+Questions:
+1. Run: codex app-server daemon version
+2. Check if daemon is running
+3. Read the codex-companion.mjs task command handler - what does it do when no broker session exists?
+4. Read lib/codex.mjs - trace getSessionRuntimeStatus and runAppServerTurn
+5. Is the broker REQUIRED for forwarding? Or can it start Codex directly?
+6. How to ensure forwarding works?
+
+Output clear findings and actionable fix.
