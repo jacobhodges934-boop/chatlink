@@ -1,17 +1,17 @@
 {
-  "name": "chatmcp-server",
-  "version": "1.0.0",
-  "description": "MCP server that bridges Claude Code to your AI browser tabs (ChatGPT, Claude, Gemini, Grok, DeepSeek, Mistral, Perplexity)",
+  "name": "chatlink-server",
+  "version": "0.5.0",
+  "description": "MCP server bridging Claude Code to AI browser tabs — ChatGPT, Gemini, Claude, DeepSeek, Grok and more",
   "type": "module",
   "main": "dist/index.js",
-  "author": "Rohit Gupta <indiantinker@gmail.com>",
+  "author": "",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/indiantinker/chatMCP.git"
+    "url": "git+https://github.com/jacobhodges934-boop/chatlink.git"
   },
   "bugs": {
-    "url": "https://github.com/indiantinker/chatMCP/issues"
+    "url": "https://github.com/jacobhodges934-boop/chatlink/issues"
   },
   "homepage": "https://github.com/indiantinker/chatMCP#readme",
   "keywords": [

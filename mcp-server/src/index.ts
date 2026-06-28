@@ -637,7 +637,7 @@ async function main() {
     sessionIdGenerator: undefined, // stateless — no session tracking needed
   });
 
-  const server = new McpServer({ name: "chatmcp", version: "0.4.0" });
+  const server = new McpServer({ name: "chatlink", version: "0.5.0" });
   registerTools(server);
   await server.connect(transport);
 
@@ -677,7 +677,7 @@ async function main() {
   });
 } else {
   // ── stdio mode (default): Claude Code ──────────────────────────────────
-  const server = new McpServer({ name: "chatmcp", version: "0.4.0" });
+  const server = new McpServer({ name: "chatlink", version: "0.5.0" });
   registerTools(server);
   const transport = new StdioServerTransport();
   await server.connect(transport);
