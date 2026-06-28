@@ -6,6 +6,8 @@ import { ChatMcpError, type ServerMessage, type ExtensionMessage, type AiTab, ty
 const BRIDGE_PORT = 27182;
 const RETRY_DELAY_MS = 500;
 const MAX_RETRIES = 12; // ~1 minute of retrying
+const CHATLINK_EXTENSION_ID = "nihicengifllbhdmcoielfdhflnbbnoh";
+const TRUSTED_EXTENSION_ORIGIN = `chrome-extension://${CHATLINK_EXTENSION_ID}`;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -110,10 +112,10 @@ export class ExtensionBridge {
     // HTTP request handler — token endpoint only
     httpServer.on("request", (req, res) => {
       if (req.method === "GET" && req.url === "/token") {
-        // Relaxed: Chrome MV3 service workers may not send chrome-extension:// origin
-        // when fetching localhost. The server only listens on 127.0.0.1 anyway.
+        // Chrome MV3 service workers may omit Origin when fetching localhost.
+        // If Origin is present, only the packaged ChatLink extension may fetch the token.
         const origin = req.headers["origin"] ?? "";
-        if (origin && !origin.startsWith("chrome-extension://")) {
+        if (origin && origin !== TRUSTED_EXTENSION_ORIGIN) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden — untrusted origin: " + origin);
           return;

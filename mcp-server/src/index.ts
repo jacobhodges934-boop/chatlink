@@ -16,6 +16,15 @@ const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
 
 const bridge = new ExtensionBridge();
 
+const DEFAULT_CONTEXT_IGNORE_PATTERNS = [
+  ".env",
+  ".env.*",
+  "**/.env",
+  "**/.env.*",
+];
+
+let ignoredContextPatternsPromise: Promise<string[]> | null = null;
+
 function structuredError(
   err: unknown,
   stage: string,
@@ -50,6 +59,140 @@ function notConnectedError(stage: string) {
     }),
     stage
   );
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  const normalized = pattern.replace(/\\/g, "/").replace(/^\/+/, "");
+  let source = "";
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i];
+    const next = normalized[i + 1];
+    if (char === "*" && next === "*") {
+      source += ".*";
+      i++;
+    } else if (char === "*") {
+      source += "[^/]*";
+    } else {
+      source += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+
+function isIgnoredContextPath(filePath: string, patterns: string[]): boolean {
+  const normalized = filePath
+    .replace(/\\/g, "/")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/^[ab]\//, "")
+    .replace(/^\.?\//, "");
+  const basename = normalized.split("/").pop() ?? normalized;
+
+  return patterns.some((rawPattern) => {
+    const pattern = rawPattern.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!pattern || pattern.startsWith("#") || pattern.startsWith("!")) return false;
+
+    if (pattern.endsWith("/")) {
+      const dir = pattern.slice(0, -1);
+      return normalized === dir || normalized.startsWith(`${dir}/`) || normalized.includes(`/${dir}/`);
+    }
+
+    if (!pattern.includes("/") && !pattern.includes("*")) {
+      return basename === pattern || normalized === pattern || normalized.includes(`/${pattern}/`);
+    }
+
+    if (!pattern.includes("/") && pattern.includes("*")) {
+      return globPatternToRegExp(pattern).test(basename);
+    }
+
+    return globPatternToRegExp(pattern).test(normalized);
+  });
+}
+
+function extractContextPaths(line: string): string[] {
+  const trimmed = line.trim();
+  const patterns = [
+    /^diff --git a\/(.+?) b\/(.+)$/,
+    /^(?:\+\+\+|---) [ab]\/(.+)$/,
+    /^Index: (.+)$/,
+    /^(?:File|Path):\s+(.+)$/i,
+    /^#{1,6}\s+(?:File:\s*)?`?([^`]+?)`?\s*$/,
+    /^```(?:[a-zA-Z0-9_-]+)?\s+(.+)$/,
+    /^={3,}\s*(.+?)\s*={3,}$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match) return match.slice(1).filter(Boolean);
+  }
+  return [];
+}
+
+async function loadIgnoredContextPatterns(): Promise<string[]> {
+  if (!ignoredContextPatternsPromise) {
+    ignoredContextPatternsPromise = (async () => {
+      const candidates = [join(process.cwd(), ".gitignore"), join(process.cwd(), "..", ".gitignore")];
+      const loaded: string[] = [];
+      for (const candidate of candidates) {
+        try {
+          const content = await readFile(candidate, "utf8");
+          loaded.push(
+            ...content
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line && !line.startsWith("#"))
+          );
+        } catch {
+          // Missing .gitignore is fine; default secret-file patterns still apply.
+        }
+      }
+      return Array.from(new Set([...DEFAULT_CONTEXT_IGNORE_PATTERNS, ...loaded]));
+    })();
+  }
+  return ignoredContextPatternsPromise;
+}
+
+function stripIgnoredContextSections(context: string, patterns: string[]): { context: string; strippedPaths: string[] } {
+  const strippedPaths = new Set<string>();
+  const output: string[] = [];
+  let skippingIgnoredFile = false;
+
+  for (const line of context.split(/\r?\n/)) {
+    const paths = extractContextPaths(line);
+    if (paths.length > 0) {
+      const ignoredPath = paths.find((path) => isIgnoredContextPath(path, patterns));
+      if (ignoredPath) {
+        skippingIgnoredFile = true;
+        strippedPaths.add(ignoredPath.replace(/\\/g, "/").replace(/^[ab]\//, ""));
+        continue;
+      }
+      skippingIgnoredFile = false;
+    }
+
+    if (!skippingIgnoredFile) output.push(line);
+  }
+
+  return { context: output.join("\n").trim(), strippedPaths: Array.from(strippedPaths) };
+}
+
+function findContextSecretFindings(context: string): string[] {
+  const checks: Array<[string, RegExp]> = [
+    ["private key block", /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/],
+    ["OpenAI-style API key", /\bsk-[A-Za-z0-9_-]{20,}\b/],
+    ["JWT token", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+    ["GitHub token", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b/],
+    ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
+    ["password assignment", /^\s*["']?(?:password|passwd|pwd)["']?\s*[:=]\s*["']?[^"'\s]{6,}/im],
+    ["secret env assignment", /^\s*[A-Z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASS|PWD|CREDENTIAL)[A-Z0-9_]*\s*=\s*["']?[^"'\s]{6,}/im],
+  ];
+
+  return checks.filter(([, pattern]) => pattern.test(context)).map(([label]) => label);
+}
+
+async function sanitizeDelegateContext(context: string): Promise<{ context: string; strippedPaths: string[]; findings: string[] }> {
+  const ignoredPatterns = await loadIgnoredContextPatterns();
+  const stripped = stripIgnoredContextSections(context, ignoredPatterns);
+  const findings = findContextSecretFindings(stripped.context);
+  return { ...stripped, findings };
 }
 
 // ── Tool registration factory ──────────────────────────────────────────────
@@ -411,7 +554,30 @@ function registerTools(server: McpServer) {
       }
       try {
         let prompt = task;
-        if (context) prompt = "## Context\n\n" + context + "\n\n## Task\n\n" + task;
+        if (context) {
+          const sanitizedContext = await sanitizeDelegateContext(context);
+          if (sanitizedContext.findings.length > 0) {
+            return toolError(
+              new ChatMcpError({
+                code: "UNKNOWN_ERROR",
+                stage: "delegate_coding_task.context_security",
+                message:
+                  "Refusing to send delegate_coding_task context because it appears to contain secrets. Remove secrets from the context and try again.",
+                retryable: false,
+                details: { findings: sanitizedContext.findings },
+              }),
+              "delegate_coding_task.context_security"
+            );
+          }
+          prompt = "## Context\n\n" + sanitizedContext.context + "\n\n## Task\n\n" + task;
+          if (sanitizedContext.strippedPaths.length > 0) {
+            prompt =
+              "Context note: omitted files matched .gitignore/default secret-file patterns: " +
+              sanitizedContext.strippedPaths.join(", ") +
+              "\n\n" +
+              prompt;
+          }
+        }
         const tabs = await bridge.listAiTabs();
         const candidates = tabId
           ? tabs.filter(t => t.tabId === tabId)
