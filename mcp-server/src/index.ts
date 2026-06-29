@@ -818,6 +818,29 @@ function registerTools(server: McpServer) {
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
 
+        // Retry-tolerant getChat: single transient timeout doesn't kill the delegate
+        let consecutiveGetChatTimeouts = 0;
+        const MAX_CONSECUTIVE_TIMEOUTS = 3;
+        async function pollGetChat(tabId: number, sinceIndex?: number): Promise<Awaited<ReturnType<typeof bridge.getChat>>> {
+          while (true) {
+            try {
+              const result = await bridge.getChat(tabId, sinceIndex);
+              consecutiveGetChatTimeouts = 0; // reset on success
+              return result;
+            } catch (e: any) {
+              const code = e?.code || e?.error?.code || "";
+              if (code === "REQUEST_TIMEOUT") {
+                consecutiveGetChatTimeouts++;
+                if (consecutiveGetChatTimeouts < MAX_CONSECUTIVE_TIMEOUTS) {
+                  await new Promise(r => setTimeout(r, 1000)); // brief pause before retry
+                  continue;
+                }
+              }
+              throw e; // non-timeout or exceeded retries → surface
+            }
+          }
+        }
+
         let pollCount = 0;
         let lastUrl = targetTab.url || "";
         let prevConfidence = baselineConfidence || "";
@@ -832,7 +855,7 @@ function registerTools(server: McpServer) {
 
           await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
-          let chat = await bridge.getChat(targetTab.tabId, incrementalSinceIndex);
+          let chat = await pollGetChat(targetTab.tabId, incrementalSinceIndex);
           // Route change during polling: reset stability (page transition in progress)
           if (chat.url && chat.url !== lastUrl) {
             lastUrl = chat.url;
@@ -847,7 +870,7 @@ function registerTools(server: McpServer) {
           prevConfidence = chat.extractionMeta?.confidence || prevConfidence;
           // If messages were deleted (totalMessageCount < sinceIndex), redo full extraction
           if (chat.totalMessageCount != null && chat.totalMessageCount < incrementalSinceIndex) {
-            chat = await bridge.getChat(targetTab.tabId);
+            chat = await pollGetChat(targetTab.tabId);
           }
           // Only DOM-based signals can set sawExplicitGenerating
           if (chat.isGenerating === true) {
@@ -899,7 +922,8 @@ function registerTools(server: McpServer) {
           // Grok exception: thinking container keeps isGenerating=true permanently
           if (sawExplicitGenerating && ((startNewChat && platform === "grok") || chat.isGenerating !== true) && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
             await new Promise(r => setTimeout(r, delegateTimings.finalReadDelayMs));
-            const finalChat = await bridge.getChat(targetTab.tabId);
+            let finalChat;
+            try { finalChat = await pollGetChat(targetTab.tabId); } catch (_) { return wrapResult(lastAssistant, "explicit_end_final_read_timeout"); }
             const finalText = startNewChat
               ? getNewAssistantAfterNewChat(finalChat)
               : getNewAssistantText(finalChat);
@@ -916,14 +940,15 @@ function registerTools(server: McpServer) {
           // Grok exception: thinking container may keep isGenerating=true permanently
           const generatingDone = (startNewChat && platform === "grok") ? true : chat.isGenerating !== true;
           if (sawAssistantContent && generatingDone && stablePolls >= delegateTimings.contentStabilityPolls && Date.now() - lastChangedAt >= delegateTimings.contentStabilityMs) {
-            const finalChat = await bridge.getChat(targetTab.tabId);
-            const finalText = startNewChat
-              ? getNewAssistantAfterNewChat(finalChat)
-              : getNewAssistantText(finalChat);
-            if (finalText === lastAssistant) {
+            let finalChatB;
+            try { finalChatB = await pollGetChat(targetTab.tabId); } catch (_) { return wrapResult(lastAssistant, "content_stability_final_read_timeout"); }
+            const finalTextB = startNewChat
+              ? getNewAssistantAfterNewChat(finalChatB)
+              : getNewAssistantText(finalChatB);
+            if (finalTextB === lastAssistant) {
               return wrapResult(lastAssistant, "content_stability");
             }
-            lastAssistant = finalText || lastAssistant;
+            lastAssistant = finalTextB || lastAssistant;
             lastChangedAt = Date.now();
             stablePolls = 0;
           }

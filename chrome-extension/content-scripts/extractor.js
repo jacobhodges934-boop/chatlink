@@ -13,7 +13,7 @@
 (function() {
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 24;
+var EXTRACTOR_VERSION = 25;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -460,13 +460,14 @@ const EXTRACTORS = {
         id: "gemini_generic_error_alert",
         selectors: [
           '[role="alert"]',
-          '[role="status"]',
-          '[aria-live]',
           'mat-snack-bar-container',
           '[data-testid*="error" i]',
-          '[class*="error" i]',
           '[class*="toast" i]',
           '[class*="banner" i]',
+          // NOTE: [aria-live] and [role="status"] removed — Gemini uses them
+          // on ALL response containers for screen-reader announcements, not
+          // just errors. Matching them causes false PLATFORM_ERROR when the
+          // assistant response happens to contain words like "error" or "network".
         ],
         patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /服务.*不可用/i, /网络.*错误/i],
         code: "PLATFORM_ERROR",
