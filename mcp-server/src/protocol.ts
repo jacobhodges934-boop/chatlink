@@ -46,6 +46,11 @@ export const ChatContentSchema = z.object({
   isGenerating: z.boolean().optional(),
   errorState: PlatformErrorStateSchema.optional(),
   totalMessageCount: z.number().int().nonnegative().optional(),
+  extractionMeta: z.object({
+    confidence: z.enum(["high", "medium", "low"]),
+    matchedTier: z.number().int().min(1).max(3),
+    adapter: z.string().max(128),
+  }).optional(),
 });
 
 export const PageContentSchema = z.object({
@@ -94,6 +99,8 @@ export const ExtensionMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("artifacts_result"), requestId: RequestIdSchema, content: ArtifactsContentSchema }).strict(),
   z.object({ type: z.literal("send_message_result"), requestId: RequestIdSchema, success: z.boolean(), sent: z.boolean().optional(), platform: z.string().max(128).optional(), method: z.string().max(64).optional(), confirmationSignal: z.string().max(128).optional() }).strict(),
   z.object({ type: z.literal("error"), requestId: RequestIdSchema, message: z.string().max(MAX_ERROR_MESSAGE_LENGTH), code: z.string().max(64).optional(), stage: z.string().max(128).optional(), retryable: z.boolean().optional(), details: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal("tab_closed"), tabId: z.number().int().positive() }).strict(),
+  z.object({ type: z.literal("tab_navigated"), tabId: z.number().int().positive(), url: z.string().max(8192).optional() }).strict(),
 ]);
 
 // ── Response shape schemas (passthrough for flexible matching) ────────────────

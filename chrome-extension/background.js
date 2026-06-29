@@ -97,6 +97,24 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+// ── Tab lifecycle listeners — notify server immediately on close/navigate ──
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (connected && ws && ws.readyState === WebSocket.OPEN) {
+    send({ type: "tab_closed", tabId });
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.url) return;
+  if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
+  // Notify if AI tab navigated away from known AI host
+  const wasAI = AI_HOSTNAMES.has(parseHostname(tab.url || ""));
+  const isAI = AI_HOSTNAMES.has(parseHostname(changeInfo.url));
+  if (wasAI && !isAI) {
+    send({ type: "tab_navigated", tabId, url: changeInfo.url });
+  }
+});
+
 // ── WebSocket connection ────────────────────────────────────────────────
 async function fetchToken() {
   try {
@@ -196,6 +214,23 @@ function updateBadge(isConnected) {
 const tabSendQueues = new Map();
 const completedSendOps = new Map();
 const SEND_OP_TTL_MS = 2 * 60 * 1000;
+const DEDUP_STORAGE_KEY = "completedSendOps";
+
+// Restore dedup cache from session storage on Service Worker startup
+(async function restoreDedupCache() {
+  try {
+    const stored = await chrome.storage.session.get(DEDUP_STORAGE_KEY);
+    const entries = stored[DEDUP_STORAGE_KEY];
+    if (Array.isArray(entries)) {
+      const now = Date.now();
+      for (const entry of entries) {
+        if (entry && entry.op && now - entry.ts < SEND_OP_TTL_MS) {
+          completedSendOps.set(entry.op, { ts: entry.ts, result: entry.result });
+        }
+      }
+    }
+  } catch (_) { /* storage unavailable — continue with empty cache */ }
+})();
 
 function enqueueTabSend(tabId, fn) {
   const prev = tabSendQueues.get(tabId) ?? Promise.resolve();
@@ -216,6 +251,16 @@ function getDedupResult(operationId) {
 function setDedupResult(operationId, result) {
   if (!operationId) return;
   completedSendOps.set(operationId, { ts: Date.now(), result });
+  // Persist to session storage so cache survives Service Worker restart
+  try {
+    const entries = [];
+    completedSendOps.forEach((v, k) => {
+      if (Date.now() - v.ts < SEND_OP_TTL_MS) {
+        entries.push({ op: k, ts: v.ts, result: v.result });
+      }
+    });
+    chrome.storage.session.set({ [DEDUP_STORAGE_KEY]: entries.slice(-20) });
+  } catch (_) { /* storage unavailable — continue with memory-only */ }
 }
 
 // ── Server message handlers ─────────────────────────────────────────────
@@ -343,7 +388,7 @@ async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
     if (result.type === "page") {
       send({ type: "page_result", requestId, content: { tabId: tab.id, platform, url: result.url, title: result.title, text: result.text, extractedAt: result.extractedAt } });
     } else {
-      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating, errorState: result.errorState, totalMessageCount: result.totalMessageCount } });
+      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating, errorState: result.errorState, totalMessageCount: result.totalMessageCount, extractionMeta: result.extractionMeta } });
     }
   } catch (err) { sendError(requestId, "background.get_content", err); }
 }

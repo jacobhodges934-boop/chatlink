@@ -286,6 +286,19 @@ export class ExtensionBridge {
       return;
     }
     if (msg.type === "ping") { return; }
+    if (msg.type === "tab_closed" || msg.type === "tab_navigated") {
+      const eventName = msg.type === "tab_closed" ? "TAB_CLOSED" : "TAB_NAVIGATED";
+      process.stderr.write("[ChatLink] Tab event: " + eventName + " tabId=" + msg.tabId + "\n");
+      // Reject pending requests for this tab with a clear error
+      for (const [id, req] of this.pending) {
+        clearTimeout(req.timeout);
+        req.reject(this.makeError("TAB_NOT_FOUND", "bridge.tab_lifecycle",
+          "Tab " + msg.tabId + " was " + (msg.type === "tab_closed" ? "closed" : "navigated away"), id, false,
+          { tabId: msg.tabId, event: eventName }));
+        this.pending.delete(id);
+      }
+      return;
+    }
     if (!("requestId" in msg)) return;
     const req = this.pending.get(msg.requestId);
     if (!req) {
@@ -482,10 +495,10 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     return result.content;
   }
 
-  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed"): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
-    const operationId = randomBytes(16).toString("hex");
+  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed", operationId?: string): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
+    const opId = operationId || randomBytes(16).toString("hex");
     const result = await this.request(
-      { type: "send_message", tabId, text, platform, operationId, confirmation },
+      { type: "send_message", tabId, text, platform, operationId: opId, confirmation },
       SendMessageResultSchema,
       "send_message_result",
       25000

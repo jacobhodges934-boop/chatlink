@@ -145,7 +145,7 @@ const EXTRACTORS = {
           const text = textOf(article);
           if (text) messages.push({ role, content: text });
         }
-        return { messages: messages, totalCount: articles.length };
+        return { messages: messages, totalCount: articles.length, tier: 1 };
       }
 
       // Tier 2: data-message-author-role directly on any element
@@ -218,9 +218,7 @@ const EXTRACTORS = {
           const text = textOf(turn);
           if (text) messages.push({ role: isHuman ? "user" : "assistant", content: text });
         }
-        return { messages: messages, totalCount: turns.length };
-      }
-
+        return { messages: messages, totalCount: turns.length, tier: 1 };
       // Tier 2: class-based (less stable)
       const humanEls = document.querySelectorAll(".human-turn, [class*='HumanTurn']");
       const aiEls = document.querySelectorAll(".ai-turn, [class*='AiTurn'], [class*='AssistantTurn']");
@@ -308,7 +306,7 @@ const EXTRACTORS = {
           const text = textOf(turn.el);
           if (text) messages.push({ role: turn.role, content: text });
         }
-        return { messages: messages, totalCount: allTurns.length };
+        return { messages: messages, totalCount: allTurns.length, tier: 1 };
       }
 
       return fallbackFullText("user");
@@ -372,7 +370,7 @@ const EXTRACTORS = {
           const text = textOf(el);
           if (text) messages.push({ role: isUser ? "user" : "assistant", content: text });
         }
-        return { messages: messages, totalCount: testidMessages.length };
+        return { messages: messages, totalCount: testidMessages.length, tier: 1 };
       }
 
       // Tier 2: look for visually distinct bubbles and guess from layout
@@ -472,7 +470,7 @@ const EXTRACTORS = {
           const text = textOf(turn.el);
           if (text) messages.push({ role: turn.role, content: text });
         }
-        return { messages: messages, totalCount: allTurns.length };
+        return { messages: messages, totalCount: allTurns.length, tier: 1 };
       }
 
       // Tier 2: alternating pattern in the chat container
@@ -558,7 +556,7 @@ const EXTRACTORS = {
           const text = textOf(el);
           if (text) messages.push({ role: normalized, content: text });
         }
-        return { messages: messages, totalCount: roleEls.length };
+        return { messages: messages, totalCount: roleEls.length, tier: 1 };
       }
 
       // Tier 2: class-based
@@ -667,7 +665,7 @@ const EXTRACTORS = {
           const text = textOf(turn.el);
           if (text) messages.push({ role: turn.role, content: text });
         }
-        return { messages: messages, totalCount: allTurns.length };
+        return { messages: messages, totalCount: allTurns.length, tier: 1 };
       }
 
       // Tier 2: section-based — Perplexity groups each Q&A in a section
@@ -947,12 +945,12 @@ function detectErrorState(cfg) {
 // ---------------------------------------------------------------------------
 
 function fallbackFullText(defaultRole) {
-  // Just return the whole main content as one big block — better than nothing
+  // Return whole main content as system message with low-confidence marker
+  // Role is "system" so downstream assistant-text selectors naturally skip it
   const mainEl =
     document.querySelector("main, [role='main'], #main") ?? document.body;
   const text = textOf(mainEl);
-  // Return as a single assistant message so it still flows into context
-  return text ? [{ role: "assistant", content: `[Full page text]\n\n${text}` }] : [];
+  return text ? [{ role: "system", content: "[Low confidence — full page fallback]\n\n" + text }] : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -968,8 +966,13 @@ function extractChat(sinceIndex) {
         var result = ext.extract(sinceIndex);
         var messages = result.messages || result;
         var totalCount = result.totalCount;
+        var tier = result.tier || 0;
         // If extract returned a plain array (old-style), totalCount = messages.length + sinceIndex (approximate)
         if (!totalCount && Array.isArray(result)) totalCount = result.length + sinceIndex;
+        // Detect tier from fallback: system-role messages = fallback (tier 3)
+        if (!tier && Array.isArray(messages) && messages.length > 0 && messages[0].role === "system") tier = 3;
+        if (!tier) tier = 2; // plain array without tier = tier 2 fallback
+        var confidence = tier === 1 ? "high" : tier === 2 ? "medium" : "low";
         return {
           type: "chat",
           platform: name,
@@ -980,6 +983,11 @@ function extractChat(sinceIndex) {
           isGenerating: isGeneratingNow(),
           errorState: detectErrorState(ext),
           totalMessageCount: totalCount,
+          extractionMeta: {
+            confidence: confidence,
+            matchedTier: tier,
+            adapter: name,
+          },
         };
       } catch (err) {
         return { error: "Extraction failed on " + name + ": " + err.message };
