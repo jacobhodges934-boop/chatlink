@@ -13,7 +13,7 @@
 (function() {
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 20;
+var EXTRACTOR_VERSION = 21;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -450,6 +450,8 @@ const EXTRACTORS = {
       'model-response-text',
       'model-response',
       '.response-content-markdown',
+      '.assistant-messages-primary-container',
+      '[class*="assistant-messages" i]',
     ],
     errorRules: [
       {
@@ -504,12 +506,13 @@ const EXTRACTORS = {
         document.querySelectorAll(
           "response-content, model-response-text, " +
           "[class*='response-content' i], [class*='model-response' i], " +
+          ".assistant-messages-primary-container, [class*='assistant-messages' i], " +
           "[data-testid*='response' i], [data-testid*='assistant' i], " +
           "[class*='markdown' i], [class*='answer' i]"
         ),
         "assistant",
         sinceIndex,
-        ["model-response-text", "response-content", ".response-content-markdown", "[class*='markdown' i]"]
+        ["model-response-text", "response-content", ".assistant-messages-primary-container", ".message-text", ".response-content-markdown", "[class*='markdown' i]"]
       );
       if (structural.totalCount > 0) return structural;
 
@@ -1095,7 +1098,10 @@ function detectRuleErrorState(rules) {
 }
 
 function detectErrorState(cfg) {
-  cfg = cfg || (getCfg ? getCfg() : null);
+  if (!cfg || !cfg.name) {
+    var detectedCfg = getCfg ? getCfg() : null;
+    cfg = Object.assign({}, detectedCfg || {}, cfg || {});
+  }
 
   // 1. Platform-specific rules
   var platformRule = detectRuleErrorState(cfg && cfg.errorRules);
@@ -1217,6 +1223,7 @@ function extractChat(sinceIndex) {
   for (const [name, ext] of Object.entries(EXTRACTORS)) {
     if (ext.detect()) {
       try {
+        var namedExt = Object.assign({ name: name }, ext);
         var result = ext.extract(sinceIndex);
         var messages = result.messages || result;
         var totalCount = result.totalCount;
@@ -1235,7 +1242,7 @@ function extractChat(sinceIndex) {
           messages: messages,
           extractedAt: new Date().toISOString(),
           isGenerating: isGeneratingNow(),
-          errorState: detectErrorState(ext),
+          errorState: detectErrorState(namedExt),
           totalMessageCount: totalCount,
           extractionMeta: {
             confidence: confidence,
