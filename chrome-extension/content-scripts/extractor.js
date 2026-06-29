@@ -13,7 +13,7 @@
 (function() {
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 22;
+var EXTRACTOR_VERSION = 23;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -1078,10 +1078,46 @@ function isGenericGeneratingNow() {
   return false;
 }
 
+function hasToolCallInProgress() {
+  // AI is waiting for external tool response (e.g. GitHub, file read).
+  // During this phase text may be static but the model is NOT done.
+  var selectors = [
+    // ChatGPT: tool message indicators ("已收到应用响应", "正在使用...")
+    '.group\\/tool-message',
+    '[class*="tool-message"]',
+    '[class*="tool-call"]',
+    // ChatGPT: deep research / thinking indicators
+    '[data-testid*="thinking" i]',
+    '[data-testid*="reasoning" i]',
+    '[aria-label*="思考" i]',
+    '[aria-label*="thinking" i]',
+    '[class*="thinking-indicator"]',
+    '[class*="reasoning-indicator"]',
+    // Generic: streaming/progress spinners inside assistant containers
+    '.agent-turn [class*="spinner" i]',
+    '.agent-turn [role="progressbar"]',
+    '[class*="agent-turn"] [class*="streaming" i]',
+    // Claude: tool-use blocks
+    '[data-testid*="tool-use" i]',
+    '[class*="tool-use-container"]',
+    // Gemini: inline progress
+    '[class*="response-container"] [class*="loading" i]',
+  ];
+  for (var i = 0; i < selectors.length; i++) {
+    var els = document.querySelectorAll(selectors[i]);
+    for (var j = 0; j < els.length; j++) {
+      if (vis(els[j])) return true;
+    }
+  }
+  return false;
+}
+
 function isGeneratingNow() {
   var cfg = getCfg ? getCfg() : null;
   var turnPulse = consumeAssistantTurnPulse();
 
+  // Tool-call-in-progress: AI waiting for external resource — still generating
+  if (hasToolCallInProgress()) return true;
   if (hasActiveStopSignal(cfg)) return true;
   if (hasActiveBusySignal(cfg)) return true;
   if (hasGenerationDisabledSignal(cfg)) return true;
