@@ -1214,12 +1214,34 @@ async function main() {
   });
 } else {
   // ── stdio mode (default): Claude Code ──────────────────────────────────
-  const server = new McpServer({ name: "chatlink", version: "0.5.0" });
-  registerTools(server);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Also serves HTTP on 27183 so other agents (OpenCode) can connect simultaneously
+  const stdioServer = new McpServer({ name: "chatlink", version: "0.5.0" });
+  registerTools(stdioServer);
+  const sharedTransport = new StdioServerTransport();
+  await stdioServer.connect(sharedTransport);
+
+  // Lightweight HTTP sidecar for OpenCode et al. — one bridge, many clients
+  const mcpForHttp = new McpServer({ name: "chatlink", version: "0.5.0" });
+  registerTools(mcpForHttp);
+  const httpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  await mcpForHttp.connect(httpTransport);
+
+  const sidecar = createHttpServer(async (req, res) => {
+    if (req.url !== "/mcp") { res.writeHead(404).end(); return; }
+    const auth = validateBearerToken(req);
+    if (!auth.valid) { res.writeHead(401).end(auth.reason); return; }
+    const chunks: Buffer[] = []; let size = 0;
+    req.on("data", (c: Buffer) => { size += c.length; if (size > MAX_MCP_BODY_BYTES) req.destroy(); else chunks.push(c); });
+    req.on("end", async () => {
+      if (size > MAX_MCP_BODY_BYTES) { res.writeHead(413).end(); return; }
+      let body: unknown;
+      try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined; } catch { res.writeHead(400).end(); return; }
+      await httpTransport.handleRequest(req, res, body);
+    });
+  });
+  sidecar.listen(HTTP_PORT, "127.0.0.1");
   process.stderr.write(
-    `ChatMCP MCP server running. Waiting for Chrome extension on port 27182.\n` +
+    `ChatLink stdio + HTTP → 127.0.0.1:${HTTP_PORT}/mcp (bridge:27182)\n` +
     `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
   );
   }

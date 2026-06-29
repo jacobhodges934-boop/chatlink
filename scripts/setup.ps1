@@ -45,8 +45,6 @@ foreach ($b in @($chrome, $edge)) {
 Write-Host "`n  Done. Now:" -ForegroundColor Green
 Write-Host "  1. Enable Developer Mode → Load unpacked → select:" -ForegroundColor White
 Write-Host "     $repoRoot\chrome-extension" -ForegroundColor Cyan
-Write-Host "  2. Restart Claude Code. It just works." -ForegroundColor White
-Write-Host ""
-Write-Host "  To also use OpenCode: start daemon first" -ForegroundColor Yellow
-Write-Host "    .\scripts\daemon.ps1" -ForegroundColor Cyan
+Write-Host "  2. Restart Claude Code." -ForegroundColor White
+Write-Host "     OpenCode also works — CC auto-serves HTTP for it." -ForegroundColor Green
 Write-Host ""
