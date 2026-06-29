@@ -1,7 +1,7 @@
 {
   "name": "chatlink-server",
   "version": "0.5.0",
-  "description": "MCP server bridging Claude Code to AI browser tabs — ChatGPT, Gemini, Claude, DeepSeek, Grok and more",
+  "description": "Bridge Claude Code to seven browser AI chats through a local, authenticated MCP server. No API keys required — uses your existing web sessions.",
   "type": "module",
   "main": "dist/index.js",
   "author": "",

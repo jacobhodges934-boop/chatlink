@@ -1,113 +1,330 @@
 # ChatLink
 
-让 Claude Code 直接读写 AI 网页对话。支持 7 平台读取和发送（ChatGPT、Claude、Gemini、Grok、DeepSeek、Mistral、Perplexity）。
+**Your browser already has the models. ChatLink gives Claude Code the wire.**
 
-不烧 API 费用——用的是你浏览器里已有的网页订阅额度。
+Turn ChatGPT, Claude, Gemini, DeepSeek, Grok, Mistral, and Perplexity tabs into tools that Claude Code can read, write to, and delegate work through.
 
-## 架构
+One local bridge. Seven AI platforms. No separate model API key required.
+
+ChatLink uses the AI sessions already open in your browser. Your existing web subscription and usage limits still apply, but ChatLink does not add separate per-token model API billing.
+
+## Why ChatLink?
+
+Claude Code is excellent at working inside your repository. Browser AI products are excellent at research, second opinions, long-form reasoning, and model-specific capabilities.
+
+ChatLink connects them.
+
+Ask Claude Code to:
+
+- send a coding task to ChatGPT and wait for the complete answer
+- pull context from an existing Claude or Gemini conversation
+- compare responses across multiple AI platforms
+- read documentation, issues, and articles from open browser tabs
+- extract Claude artifacts and research sources
+- coordinate several browser AI tabs without manually copying and pasting
 
 ```
-Chrome 标签页（ChatGPT/Gemini/Claude...）
-    ↕ DOM 读写（extractor.js — 平台适配器）
-Chrome 扩展（background.js — Service Worker）
-    ↕ WebSocket + Zod 校验（protocol.ts）
-MCP Server（bridge.ts + index.ts）
-    ↕ stdio
-Claude Code
+You
+ └─ Claude Code
+     └─ ChatLink MCP
+         ├─ ChatGPT
+         ├─ Claude
+         ├─ Gemini
+         ├─ DeepSeek
+         ├─ Grok
+         ├─ Mistral
+         └─ Perplexity
 ```
 
-## 安装
+### Supported platforms
 
-```powershell
+| Platform | Read conversations | Send messages | Delegate tasks |
+|---|---|---|---|
+| ChatGPT | ✓ | ✓ | ✓ |
+| Claude | ✓ | ✓ | ✓ |
+| Gemini | ✓ | ✓ | ✓ |
+| DeepSeek | ✓ | ✓ | ✓ |
+| Grok | ✓ | ✓ | ✓ |
+| Mistral | ✓ | ✓ | ✓ |
+| Perplexity | ✓ | ✓ | ✓ |
+
+Claude also supports artifact and research-panel extraction.
+
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Claude Code or another MCP client                           │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                 stdio or Streamable HTTP
+                 HTTP: 127.0.0.1:27183
+                 Bearer authentication
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ ChatLink MCP Server                                         │
+│                                                             │
+│ index.ts     MCP tools, task orchestration, tab scheduling  │
+│ bridge.ts    Local WebSocket bridge and authentication      │
+│ protocol.ts  End-to-end Zod protocol validation             │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                 Authenticated WebSocket
+                 ws://127.0.0.1:27182
+                 Random 64-character session token
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ Chrome Manifest V3 extension                                │
+│                                                             │
+│ background.js   Service Worker, routing, deduplication      │
+│ extractor.js    DOM extraction and platform adapters        │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                  chrome.runtime messaging
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│ Browser AI tabs                                             │
+│ ChatGPT · Claude · Gemini · DeepSeek · Grok · Mistral · PPLX│
+└─────────────────────────────────────────────────────────────┘
+```
+
+Everything runs locally between the MCP process and your Chrome extension. ChatLink does not proxy conversations through a hosted ChatLink server.
+
+## Reliability by design
+
+Browser interfaces change constantly. ChatLink is built around that reality rather than pretending the DOM is stable.
+
+### Tiered extraction
+
+Every platform has a dedicated adapter with three extraction levels:
+
+- **Tier 1 — stable selectors**: Uses semantic attributes such as `data-testid`, message roles, and platform-specific elements.
+- **Tier 2 — structural heuristics**: Falls back to message containers, DOM order, layout, and role inference.
+- **Tier 3 — page fallback**: Returns low-confidence page text when structured extraction is unavailable.
+
+Every extraction includes `extractionMeta` with a `high`, `medium`, or `low` confidence level, so downstream agents can distinguish reliable transcripts from fallback data.
+
+### Dual completion detection
+
+`delegate_coding_task` does not rely on a single fragile selector. It combines:
+
+- explicit DOM generation signals, including stop and busy controls
+- assistant-message detection
+- content-stability verification
+- a final reread before declaring completion
+- configurable timeouts with partial-response reporting
+
+### Incremental polling
+
+After the initial conversation snapshot, polling requests only newly added messages instead of repeatedly extracting the full transcript. This reduces DOM work by roughly 90% during typical delegated tasks and keeps long conversations responsive.
+
+### Task and tab safety
+
+- Per-tab mutexes prevent overlapping delegated tasks.
+- Smart tab selection skips tabs already in use.
+- Send operations use stable operation IDs.
+- Deduplication state is stored in `chrome.storage.session`, surviving Service Worker restarts within the browser session.
+- Tab close and navigation events immediately invalidate affected operations.
+- AI webpage output is explicitly marked as `untrusted`.
+
+## Quick start
+
+### Requirements
+
+- Node.js 18 or newer
+- Google Chrome 116 or newer
+- Claude Code or another MCP-compatible client
+- At least one supported AI website open and signed in
+
+### 1. Clone and build
+
+```bash
 git clone https://github.com/jacobhodges934-boop/chatlink.git
 cd chatlink/mcp-server
-npm install && npm run build
-```
-
-### 注册 MCP 服务器
-
-```powershell
-claude mcp add chatlink -- node D:/文档/chatlink/mcp-server/dist/index.js
-```
-
-### 安装 Chrome 扩展
-
-1. `chrome://extensions` → 右上角打开「开发者模式」
-2. 「加载已解压的扩展程序」→ 选择 `chrome-extension/` 文件夹
-3. 打开 chatgpt.com，确认扩展图标显示 **ON**
-
-> **注意：** 修改扩展代码后，如果内容脚本不更新，需要**完全卸载扩展再重新加载**（Chrome 刷新按钮不保证 content script 热更新）。
-
-## 工具
-
-| 工具 | 用途 |
-|------|------|
-| `delegate_coding_task` | **核心工具** — 发任务到 AI 聊天，等待完整回复。一次调用搞定 找标签→发消息→等完成→返回 |
-| `list_ai_tabs` | 列出所有 AI 聊天标签页 |
-| `get_chat_context` | 拉取完整对话记录 |
-| `send_chat_message` | 向 AI 聊天框输入并发送 |
-| `get_page_content` | 读取任意网页正文 |
-| `get_claude_artifacts` | 提取 Claude.ai artifacts |
-| `list_tabs` | 列出所有标签页 |
-| `extension_status` | 检查扩展连接状态 |
-
-### delegate_coding_task 工作原理
-
-```
-发送任务 → 等待完成 → 返回结果
-
-完成检测（按优先级）：
-  1. explicit_end   — DOM 检测到 stop 按钮消失（~3-6s）
-  2. content_stability — 回复文本稳定 3.5s（~5-10s）
-  3. timeout         — 超时，返回部分内容 + isError
-  
-安全：所有返回值带 trust: "untrusted" 标记
-```
-
-## 开发
-
-```powershell
-cd mcp-server
-
-# 构建
+npm install
 npm run build
-
-# 测试（9 个单元测试）
-npm test
 ```
 
-## 项目结构
+### 2. Load the Chrome extension
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the repository's `chrome-extension/` directory.
+5. Open a supported AI website.
+6. Confirm that the ChatLink extension badge displays **ON**.
+
+> When extension code changes, reload ChatLink from `chrome://extensions` and refresh any open AI tabs.
+
+### 3. Register ChatLink with Claude Code
+
+Use the absolute path to the compiled server.
+
+**macOS or Linux**
+
+```bash
+claude mcp add chatlink -- node /absolute/path/to/chatlink/mcp-server/dist/index.js
+```
+
+**Windows PowerShell**
+
+```bash
+claude mcp add chatlink -- node "C:\absolute\path\to\chatlink\mcp-server\dist\index.js"
+```
+
+Restart Claude Code after registering the server.
+
+### 4. Verify the connection
+
+Open ChatGPT, Claude, Gemini, or another supported platform, then ask Claude Code:
+
+> Use ChatLink to check the extension status and list my open AI tabs.
+
+You can also ask it directly:
+
+> Send this task to ChatGPT through ChatLink and return only the new response: Review the current repository architecture and identify the three highest-risk modules.
+
+## MCP tools
+
+| Tool | What it does |
+|---|---|
+| `delegate_coding_task` | Finds an available platform tab, sends a task, waits for completion, and returns only the new assistant response |
+| `send_chat_message` | Sends text to a specific or automatically selected AI tab |
+| `get_chat_context` | Reads recent messages from an AI conversation |
+| `list_ai_tabs` | Lists supported AI chat tabs with their tab IDs |
+| `list_tabs` | Lists all readable browser tabs |
+| `get_page_content` | Extracts readable content from a browser tab |
+| `get_claude_artifacts` | Extracts Claude artifacts, code, documents, research steps, and optional source links |
+| `extension_status` | Checks whether the Chrome extension is connected |
+
+### `delegate_coding_task`
+
+This is the main high-level tool.
 
 ```
-mcp-server/src/
-  index.ts              # MCP 工具注册 + delegate_coding_task
-  bridge.ts             # WebSocket 桥接 + Zod 运行时校验
-  protocol.ts           # Zod schemas（消息类型 + 响应类型）
-  completion-tracker.ts # 完成状态机（纯函数）
-  config.ts             # 集中时序配置
-  types.ts              # 错误类型
-
-chrome-extension/
-  background.js         # Service Worker + 消息路由
-  content-scripts/
-    extractor.js        # 平台适配器（7 平台 × Tier1/2/3 提取）
-  popup/                # 弹出窗口
-  diagnostics.html      # 诊断面板
+find tab
+   ↓
+check tab availability
+   ↓
+capture conversation baseline
+   ↓
+scan task and context for secrets
+   ↓
+send with persistent operation ID
+   ↓
+observe DOM and incremental messages
+   ↓
+verify completion
+   ↓
+return only the new assistant response
 ```
 
-## 配置
+**Supported arguments:**
 
-时序参数集中在 `mcp-server/src/config.ts`（服务端）和 `background.js` 顶部（扩展端）。按需调整即可，不需要散落修改。
+| Argument | Description |
+|---|---|
+| `platform` | `chatgpt`, `claude`, `gemini`, `deepseek`, `grok`, `mistral`, or `perplexity` |
+| `task` | The task to send |
+| `tabId` | Optional exact browser tab |
+| `context` | Optional source files, logs, diffs, or other context |
+| `timeout` | Completion timeout from 5 to 900 seconds; default is 180 |
 
-## 故障排除
+## HTTP MCP mode
 
-| 症状 | 解决 |
-|------|------|
-| NOT CONNECTED | 重启 Claude Code |
-| 内容脚本不更新 | 卸载扩展 → 重新加载 |
-| delegate 超时 | 检查 ChatGPT 页面是否在对话中（非登录页） |
-| 平台返回 unknown | 刷新 ChatGPT 页面（ensureContentScript 会自动注入） |
+ChatLink uses stdio by default. It can also expose a local Streamable HTTP MCP endpoint for clients such as editors and coding agents that support HTTP transport.
+
+```bash
+cd mcp-server
+node dist/index.js --http
+```
+
+The server listens on `http://127.0.0.1:27183/mcp`. A random Bearer token is printed at startup.
+
+HTTP mode includes: loopback-only binding, Bearer authentication, timing-safe token comparison, a 1 MB request-body limit, and stateless MCP request handling.
+
+**Do not expose the HTTP port to a public network.**
+
+## Security model
+
+Current protections include:
+
+- loopback-only WebSocket and HTTP servers
+- random per-process bridge tokens
+- Bearer authentication for HTTP mode
+- timing-safe credential comparison
+- Zod validation for protocol messages and responses
+- WebSocket frame and message-size limits
+- secret scanning for delegated task text and context
+- `.gitignore`-aware context filtering
+- persistent send deduplication
+- tab lifecycle invalidation
+- explicit `trust: "untrusted"` marking for external AI output
+
+**Important trust boundary**: AI responses are external webpage content. ChatLink marks them as untrusted, but the calling agent must still decide which actions are safe to execute. Never paste credentials into browser AI chats.
+
+## Project structure
+
+```
+chatlink/
+├── chrome-extension/
+│   ├── manifest.json
+│   ├── background.js
+│   ├── content-scripts/
+│   │   └── extractor.js
+│   ├── popup/
+│   └── diagnostics.html
+│
+└── mcp-server/
+    ├── src/
+    │   ├── index.ts
+    │   ├── bridge.ts
+    │   ├── protocol.ts
+    │   ├── completion-tracker.ts
+    │   ├── config.ts
+    │   └── types.ts
+    ├── package.json
+    └── tsconfig.json
+```
+
+Five files form the core data path: `extractor.js → background.js → bridge.ts → protocol.ts → index.ts`
+
+## Development
+
+```bash
+cd mcp-server
+npm run build       # Compile TypeScript
+npm test            # Run tests + extension syntax checks
+npm run dev         # Development mode
+npm run lint:extractor  # Syntax-check extension scripts only
+```
+
+## Troubleshooting
+
+| Problem | What to check |
+|---|---|
+| Extension badge shows `OFF` | MCP Server running? Use popup's reconnect |
+| No AI tabs listed | Open a supported website, wait for page load |
+| Input box not found | Refresh the AI tab; DOM may have changed |
+| Task times out | Check login, network, rate limits, CAPTCHA |
+| Extraction confidence low | Refresh page; platform UI may have changed |
+| Content script not updated | Reload extension + refresh all AI tabs |
+| Port `27182` occupied | Stop stale ChatLink process, restart MCP |
+| HTTP returns `401` | Configure Bearer token from startup output |
+
+## Limitations
+
+- Interacts with browser interfaces, not official model APIs
+- AI websites can change their DOM without notice
+- Must be signed in to the target platform
+- Web subscription limits, rate limits, and regional availability still apply
+- Browser tabs must remain open during delegated tasks
 
 ## License
 
 MIT
+
+---
+
+**Your browser tabs are no longer isolated windows. They are tools.**
+
+If ChatLink saves you from one more copy-paste loop, consider giving the repository a star. ⭐

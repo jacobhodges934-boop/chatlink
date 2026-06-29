@@ -3,7 +3,7 @@
   "minimum_chrome_version": "116",
   "name": "ChatLink",
   "version": "0.5.0",
-  "description": "ChatLink — bidirectional AI chat bridge. Read and write to ChatGPT, Gemini, Claude, DeepSeek, Grok from Claude Code via MCP.",
+  "description": "Connect Claude Code to supported AI chat tabs for secure, bidirectional reading, sending, and task delegation.",
   "permissions": [
     "tabs",
     "scripting",
