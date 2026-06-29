@@ -946,12 +946,12 @@ function detectErrorState(cfg) {
 // ---------------------------------------------------------------------------
 
 function fallbackFullText(defaultRole) {
-  // Return whole main content as system message with low-confidence marker
-  // Role is "system" so downstream assistant-text selectors naturally skip it
+  // Return whole main content as a placeholder assistant message.
+  // Confidence marker lives in extractionMeta (machine-readable), not in role.
   const mainEl =
     document.querySelector("main, [role='main'], #main") ?? document.body;
   const text = textOf(mainEl);
-  return text ? [{ role: "system", content: "[Low confidence — full page fallback]\n\n" + text }] : [];
+  return text ? [{ role: "assistant", content: "[Low confidence — full page fallback]\n\n" + text }] : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -970,8 +970,8 @@ function extractChat(sinceIndex) {
         var tier = result.tier || 0;
         // If extract returned a plain array (old-style), totalCount = messages.length + sinceIndex (approximate)
         if (!totalCount && Array.isArray(result)) totalCount = result.length + sinceIndex;
-        // Detect tier from fallback: system-role messages = fallback (tier 3)
-        if (!tier && Array.isArray(messages) && messages.length > 0 && messages[0].role === "system") tier = 3;
+        // Detect tier from fallback: [Low confidence] prefix = fallback (tier 3)
+        if (!tier && Array.isArray(messages) && messages.length > 0 && typeof messages[0].content === "string" && messages[0].content.indexOf("[Low confidence") === 0) tier = 3;
         if (!tier) tier = 2; // plain array without tier = tier 2 fallback
         var confidence = tier === 1 ? "high" : tier === 2 ? "medium" : "low";
         return {

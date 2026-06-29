@@ -31,6 +31,7 @@ const PLATFORM_NAMES = {
 };
 
 let ws = null, reconnectTimer = null, pingTimer = null, connected = false;
+const tabUrlCache = new Map(); // tabId → last known URL, for navigation detection
 
 // ── Diagnostic log system ─────────────────────────────────────────────
 async function diagLog(event, detail) {
@@ -99,6 +100,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ── Tab lifecycle listeners — notify server immediately on close/navigate ──
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabUrlCache.delete(tabId);
   if (connected && ws && ws.readyState === WebSocket.OPEN) {
     send({ type: "tab_closed", tabId });
   }
@@ -107,9 +109,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
-  // Notify if AI tab navigated to a different host (AI→non-AI or AI→AI switch)
-  const oldHost = parseHostname(tab.url || "");
+  // Notify if tab navigated to a different host.
+  // Use cached previous URL because tab.url is already the new URL at this point.
   const newHost = parseHostname(changeInfo.url);
+  const prevUrl = tabUrlCache.get(tabId);
+  const oldHost = prevUrl ? parseHostname(prevUrl) : "";
+  tabUrlCache.set(tabId, changeInfo.url);
   if (oldHost && oldHost !== newHost) {
     send({ type: "tab_navigated", tabId, url: changeInfo.url });
   }
@@ -408,6 +413,7 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
     const hostname = parseHostname(tab.url);
     if (hostname !== "claude.ai") { sendError(requestId, "background.get_artifacts.find_tab", "Tab is on " + hostname + ", not claude.ai."); return; }
 
+    await ensureContentScript(tab.id);
     let result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_ARTIFACTS", includeLinks, maxLinks }).catch(() => null);
     if (!result && !tab.active) {
       await chrome.tabs.update(tab.id, { active: true });

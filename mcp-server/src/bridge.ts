@@ -384,6 +384,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
   }
 
   private send(msg: ServerMessage) {
+    this.validateOutgoing(msg as unknown as Record<string, unknown>);
     if (this.state !== "ready" || !this.wss) {
       throw this.makeError(
         "BRIDGE_NOT_READY",
