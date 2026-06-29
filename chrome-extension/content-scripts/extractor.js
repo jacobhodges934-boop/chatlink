@@ -378,7 +378,17 @@ const EXTRACTORS = {
   // Gemini uses Angular custom elements: <user-query> and <model-response>
   gemini: {
     input: ['rich-textarea div[contenteditable="true"]','div[contenteditable="true"][role="textbox"]'],
-    send: ['button[aria-label*="send message" i]','.send-button-container button'],
+    send: [
+      'button[aria-label*="send message" i]',
+      'button[aria-label*="send" i]',
+      'button[aria-label*="发送" i]',
+      'button[aria-label*="提交" i]',
+      'button[mattooltip*="send" i]',
+      'button[mattooltip*="发送" i]',
+      'button[type="submit"]',
+      '.send-button-container button',
+      '[class*="send-button" i] button',
+    ],
     newChat: [
       'a[href="/app"]',
       'a[href*="/app"]',
@@ -480,7 +490,6 @@ const EXTRACTORS = {
     ],
     busy: [
       '[data-testid*="generating" i]',
-      '[data-testid*="thinking" i]',
       '[data-testid*="loading" i]',
       '[class*="streaming" i]',
     ],
@@ -1783,13 +1792,19 @@ function hasActiveStopSignal(cfg) {
   return false;
 }
 
-function isActiveBusyElement(el) {
+function isActiveBusyElement(el, cfg) {
   var target = controlFor(el);
   if (!vis(target) && !vis(el)) return false;
   if (isIgnoredSignalArea(target) || isRootSized(target)) return false;
   var text = (collectSignalText(target) + " " + collectSignalText(el)).toLowerCase();
   var role = "";
   try { role = el.getAttribute("role") || target.getAttribute("role") || ""; } catch (e) {}
+  if (cfg && cfg.name === "grok" && /thinking|思考/.test(text)) {
+    // Grok keeps a visible "thought for Xs" / thinking container after the
+    // answer is already readable. Treat it as metadata unless an actual stop
+    // control or streaming signal is present.
+    if (!/\b(streaming|generating|loading|progress|animate-spin|typing)\b|生成|加载|正在|回答中/.test(text)) return false;
+  }
   if (role === "progressbar") return true;
   if (el.getAttribute && el.getAttribute("aria-busy") === "true") return true;
   if (target.getAttribute && target.getAttribute("aria-busy") === "true") return true;
@@ -1802,7 +1817,7 @@ function hasActiveBusySignal(cfg) {
   var selectors = selectorList(cfg && cfg.busy, DEFAULT_BUSY_SEL);
   var els = queryAllSafe(selectors);
   for (var i = 0; i < els.length; i++) {
-    if (isActiveBusyElement(els[i])) return true;
+    if (isActiveBusyElement(els[i], cfg)) return true;
   }
   return false;
 }
