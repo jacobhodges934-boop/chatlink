@@ -47,8 +47,8 @@ export class ExtensionBridge {
   private _ready: Promise<void> | null = null;
   private lastStartError: Error | null = null;
 
-  constructor() {
-    this.token = randomBytes(32).toString("hex");
+  constructor(token: string) {
+    this.token = token;
   }
 
   start(): Promise<void> {

@@ -113,32 +113,44 @@ merge_mcp_config() {
   " 2>/dev/null
 }
 
+# Resolve the persisted HTTP token (generates on first run)
+HTTP_TOKEN=$(node "$SERVER_PATH" --token 2>/dev/null || echo "")
+if [ -z "$HTTP_TOKEN" ]; then
+  echo "  FAIL  Could not resolve HTTP token. Build may have failed."
+  exit 1
+fi
+
 configure_claude() {
   if ! $has_claude; then return; fi
+  # Remove old stdio config if present
+  claude mcp remove chatlink 2>/dev/null || true
+  # Register with HTTP transport using persisted token
   if claude mcp list 2>/dev/null | grep -q "chatlink"; then
-    echo "  INFO  Claude Code: already registered"
+    echo "  INFO  Claude Code: already registered (HTTP)"
   else
-    claude mcp add chatlink -- node "$SERVER_PATH" 2>/dev/null && \
-      echo "  OK    Claude Code: registered" || \
-      echo "  WARN  Claude Code: registration failed — run manually:"
-    echo "        claude mcp add chatlink -- node \"$SERVER_PATH\""
+    claude mcp add --transport http chatlink http://127.0.0.1:27183/mcp \
+      --header "Authorization: Bearer $HTTP_TOKEN" 2>/dev/null && \
+      echo "  OK    Claude Code: HTTP → 127.0.0.1:27183/mcp" || {
+      echo "  WARN  Claude Code HTTP registration failed. Run manually:"
+      echo "        claude mcp add --transport http chatlink http://127.0.0.1:27183/mcp --header \"Authorization: Bearer \$TOKEN\""
+    }
   fi
 }
 
 configure_opencode() {
   if ! $has_opencode && [ "$CLIENT" != "all" ]; then return; fi
   local cfg="$HOME/.config/opencode/opencode.json"
-  local entry='{"type":"local","command":"node","args":["'"$SERVER_PATH"'"]}'
+  local entry='{"type":"remote","url":"http://127.0.0.1:27183/mcp","headers":{"Authorization":"Bearer '"$HTTP_TOKEN"'"}}'
   merge_mcp_config "$cfg" "opencode" "$entry"
-  echo "  OK    OpenCode: $cfg"
+  echo "  OK    OpenCode: remote → 127.0.0.1:27183/mcp"
 }
 
 configure_cursor() {
   if ! $has_cursor && [ "$CLIENT" != "all" ]; then return; fi
   local cfg="$HOME/.cursor/mcp.json"
-  local entry='{"command":"node","args":["'"$SERVER_PATH"'"]}'
+  local entry='{"command":"node","args":["'"$SERVER_PATH"'","--http"]}'
   merge_mcp_config "$cfg" "cursor" "$entry"
-  echo "  OK    Cursor: $cfg"
+  echo "  OK    Cursor: stdio → HTTP daemon"
 }
 
 case "$CLIENT" in

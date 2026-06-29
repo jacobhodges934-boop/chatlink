@@ -63,6 +63,13 @@ Write-Host "  OK   MCP Server built" -ForegroundColor Green
 Write-Host "[4/5] Configuring MCP clients..." -ForegroundColor Yellow
 $serverPath = "$repoRoot\mcp-server\dist\index.js"
 
+# Resolve persisted HTTP token
+$HTTP_TOKEN = & node "$serverPath" --token 2>$null
+if (-not $HTTP_TOKEN) {
+    Write-Host "  FAIL  Could not resolve HTTP token. Build may have failed." -ForegroundColor Red
+    exit 1
+}
+
 function Merge-McpConfig {
     param($ConfigPath, $McpEntry)
     $dir = Split-Path -Parent $ConfigPath
@@ -86,32 +93,33 @@ function Merge-McpConfig {
 function Register-Claude {
     if (-not $hasClaude) { return }
     try {
+        claude mcp remove chatlink 2>$null | Out-Null
         if (claude mcp list 2>$null | Select-String "chatlink") {
-            Write-Host "  INFO  Claude Code: already registered" -ForegroundColor Yellow
+            Write-Host "  INFO  Claude Code: already registered (HTTP)" -ForegroundColor Yellow
         } else {
-            claude mcp add chatlink -- node "$serverPath" 2>&1 | Out-Null
-            Write-Host "  OK    Claude Code: registered" -ForegroundColor Green
+            claude mcp add --transport http chatlink http://127.0.0.1:27183/mcp --header "Authorization: Bearer $HTTP_TOKEN" 2>&1 | Out-Null
+            Write-Host "  OK    Claude Code: HTTP → 127.0.0.1:27183/mcp" -ForegroundColor Green
         }
     } catch {
-        Write-Host "  WARN  Claude Code: registration failed — run manually:" -ForegroundColor Yellow
-        Write-Host "        claude mcp add chatlink -- node `"$serverPath`"" -ForegroundColor White
+        Write-Host "  WARN  Claude Code HTTP registration failed. Run manually:" -ForegroundColor Yellow
+        Write-Host "        claude mcp add --transport http chatlink http://127.0.0.1:27183/mcp --header `"Authorization: Bearer <TOKEN>`"" -ForegroundColor White
     }
 }
 
 function Register-OpenCode {
     if (-not $hasOpenCode -and $Client -ne "all") { return }
     $cfg = "$env:USERPROFILE\.config\opencode\opencode.json"
-    $entry = @{ type = "local"; command = "node"; args = @($serverPath) }
+    $entry = @{ type = "remote"; url = "http://127.0.0.1:27183/mcp"; headers = @{ Authorization = "Bearer $HTTP_TOKEN" } }
     Merge-McpConfig $cfg $entry
-    Write-Host "  OK    OpenCode: $cfg" -ForegroundColor Green
+    Write-Host "  OK    OpenCode: remote → 127.0.0.1:27183/mcp" -ForegroundColor Green
 }
 
 function Register-Cursor {
     if (-not $hasCursor -and $Client -ne "all") { return }
     $cfg = "$env:USERPROFILE\.cursor\mcp.json"
-    $entry = @{ command = "node"; args = @($serverPath) }
+    $entry = @{ command = "node"; args = @($serverPath, "--http") }
     Merge-McpConfig $cfg $entry
-    Write-Host "  OK    Cursor: $cfg" -ForegroundColor Green
+    Write-Host "  OK    Cursor: stdio → HTTP daemon" -ForegroundColor Green
 }
 
 switch ($Client) {

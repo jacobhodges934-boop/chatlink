@@ -6,20 +6,20 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { z } from "zod";
 import { ExtensionBridge } from "./bridge.js";
 import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
-import { delegateTimings } from "./config.js";
+import { delegateTimings, resolveToken, getConfigPath } from "./config.js";
 import { normalizeForComparison, extractNewAssistantText } from "./completion-tracker.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 const HTTP_PORT = 27183;
 const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
 
-const HTTP_TOKEN = randomBytes(32).toString("hex");
+const HTTP_TOKEN = resolveToken();
 const MAX_MCP_BODY_BYTES = 1_048_576; // 1 MB
 
-const bridge = new ExtensionBridge();
+const bridge = new ExtensionBridge(HTTP_TOKEN);
 
 // Tab mutex: one active delegate per tab to prevent race conditions (P0-3)
 const tabLocks = new Map<number, Promise<void>>();
@@ -1118,6 +1118,14 @@ async function main() {
 
   // ── Mode selection ──────────────────────────────────────────────────────
   const args = process.argv.slice(2);
+
+  // --token: print persisted token and exit
+  if (args.includes("--token")) {
+    process.stderr.write(`Token config: ${getConfigPath()}\n`);
+    process.stdout.write(`${HTTP_TOKEN}\n`);
+    process.exit(0);
+  }
+
   const httpMode = args.includes("--http");
 
   if (httpMode) {
@@ -1195,11 +1203,12 @@ async function main() {
   });
 
   httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+    const masked = HTTP_TOKEN.slice(0, 4) + "…" + HTTP_TOKEN.slice(-4);
     process.stderr.write(
-      `ChatLink HTTP server running on http://127.0.0.1:${HTTP_PORT}/mcp\n` +
-      `Multiple clients (OpenCode, Copilot, Cursor) can connect simultaneously.\n` +
-      `Waiting for Chrome extension on port 27182.\n` +
-      `\nAuth token (set as Bearer token in MCP client config): ${HTTP_TOKEN}\n` +
+      `ChatLink HTTP server → http://127.0.0.1:${HTTP_PORT}/mcp\n` +
+      `Bridge port 27182 — waiting for Chrome/Edge extension.\n` +
+      `Token: ${masked}  (config: ${getConfigPath()})\n` +
+      `  Run 'node dist/index.js --token' to print the full token.\n` +
       `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
     );
   });
