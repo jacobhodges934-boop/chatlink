@@ -1220,25 +1220,60 @@ async function main() {
   const sharedTransport = new StdioServerTransport();
   await stdioServer.connect(sharedTransport);
 
-  // Lightweight HTTP sidecar for OpenCode et al. — one bridge, many clients
-  const mcpForHttp = new McpServer({ name: "chatlink", version: "0.5.0" });
-  registerTools(mcpForHttp);
-  const httpTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-  await mcpForHttp.connect(httpTransport);
+  // Lightweight HTTP sidecar for OpenCode et al.
+  // Each MCP session gets its own transport+server — one bridge, many clients.
+  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
 
   const sidecar = createHttpServer(async (req, res) => {
-    if (req.url !== "/mcp") { res.writeHead(404).end(); return; }
+    if (req.url !== "/mcp" && !req.url?.startsWith("/mcp")) { res.writeHead(404).end(); return; }
     const auth = validateBearerToken(req);
     if (!auth.valid) { res.writeHead(401).end(auth.reason); return; }
+
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    // Collect body
     const chunks: Buffer[] = []; let size = 0;
     req.on("data", (c: Buffer) => { size += c.length; if (size > MAX_MCP_BODY_BYTES) req.destroy(); else chunks.push(c); });
     req.on("end", async () => {
       if (size > MAX_MCP_BODY_BYTES) { res.writeHead(413).end(); return; }
-      let body: unknown;
-      try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined; } catch { res.writeHead(400).end(); return; }
-      await httpTransport.handleRequest(req, res, body);
+
+      // Parse body — must be a JSON object, not raw Buffer/string (SDK expects parsed JSON)
+      let parsedBody: Record<string, unknown> | undefined;
+      if (chunks.length > 0) {
+        try { parsedBody = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400).end("Invalid JSON"); return; }
+      }
+
+      const isInitialize = parsedBody?.method === "initialize";
+
+      if (isInitialize) {
+        // New session: create fresh transport + server
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+        });
+        const server = new McpServer({ name: "chatlink", version: "0.5.0" });
+        registerTools(server);
+        await server.connect(transport);
+
+        // Capture the session ID from the response header (set by transport during initialize)
+        const origSet = res.setHeader.bind(res);
+        let capturedSessionId: string | undefined;
+        res.setHeader = (name: string, value: any) => {
+          if (name.toLowerCase() === "mcp-session-id") {
+            capturedSessionId = String(value);
+            sessions.set(capturedSessionId, { transport, server });
+          }
+          return origSet(name, value);
+        };
+
+        await transport.handleRequest(req, res, parsedBody);
+      } else if (sessionId && sessions.has(sessionId)) {
+        // Route to existing session
+        const session = sessions.get(sessionId)!;
+        await session.transport.handleRequest(req, res, parsedBody);
+      } else {
+        // No valid session — client must initialize first
+        res.writeHead(400).end("Missing or invalid Mcp-Session-Id. Initialize first.");
+      }
     });
   });
   sidecar.listen(HTTP_PORT, "127.0.0.1");
