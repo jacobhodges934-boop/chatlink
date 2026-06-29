@@ -1111,20 +1111,20 @@ parentMonitor.unref();
 
 // ── Main entry ────────────────────────────────────────────────────────────
 async function main() {
-  await reclaimStaleChatMcp();
-  await bridge.start();
-  await bridge.ensureStarted();
-  await writePortOwner();
-
-  // ── Mode selection ──────────────────────────────────────────────────────
+  // ── Mode selection (lightweight: no bridge start needed) ────────────────
   const args = process.argv.slice(2);
 
-  // --token: print persisted token and exit
+  // --token: print persisted token and exit (no bridge, no port binding)
   if (args.includes("--token")) {
     process.stderr.write(`Token config: ${getConfigPath()}\n`);
     process.stdout.write(`${HTTP_TOKEN}\n`);
     process.exit(0);
   }
+
+  await reclaimStaleChatMcp();
+  await bridge.start();
+  await bridge.ensureStarted();
+  await writePortOwner();
 
   const httpMode = args.includes("--http");
 
