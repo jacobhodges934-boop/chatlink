@@ -132,42 +132,33 @@ After the initial conversation snapshot, polling requests only newly added messa
 
 ## Quick start
 
-### Requirements
-
+### 前提
 - Node.js 18+
-- Chrome 116+ or Edge 116+
-- An AI coding agent: [Claude Code](https://claude.ai/code) / [OpenCode](https://opencode.ai) / [Cursor](https://cursor.com)
-- At least one AI chat tab open and signed in (ChatGPT, Gemini, DeepSeek, Grok, etc.)
+- Chrome 116+ 或 Edge 116+
+- Claude Code / OpenCode 已安装
+- 至少一个 AI 对话标签页（ChatGPT / Gemini 等）
 
-### One-line install
+### 三步安装
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/jacobhodges934-boop/chatlink/master/scripts/bootstrap.sh | bash -s -- --client claude
-```
-
-Replace `claude` with `opencode` or `cursor`. That's it — the script clones, builds, and configures everything.
-
-### Or from a local clone
-
-**Windows (PowerShell):**
+**1. 构建 + 自动配置**
 ```powershell
-.\scripts\install.ps1 -Client claude    # or: opencode, cursor
+.\scripts\setup.ps1
 ```
 
-**macOS / Linux:**
-```bash
-bash scripts/install.sh --client claude  # or: opencode, cursor
+**2. 加载扩展** — 浏览器打开 `chrome://extensions` 或 `edge://extensions`，开启开发者模式，加载 `chrome-extension` 文件夹
+
+**3. 启动 daemon**（保持终端开着）
+```powershell
+node mcp-server\dist\index.js --http
 ```
 
-The script installs dependencies, builds the MCP server, writes the MCP config for your chosen agent, and opens the extension page.
+重启你的 coding agent，说一句 **"使用 ChatLink 检查扩展状态"**。
 
-Detailed setup → [INSTALL.md](INSTALL.md)
+---
 
-### Verify
-
-After loading the extension and restarting your coding agent:
-
-> 使用 ChatLink 检查扩展状态
+> 远程安装：`curl -fsSL https://raw.githubusercontent.com/jacobhodges934-boop/chatlink/master/scripts/bootstrap.sh | bash`
+>
+> 手动步骤 → [INSTALL.md](INSTALL.md)
 
 ## MCP tools
 
