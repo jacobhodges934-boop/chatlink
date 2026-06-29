@@ -10,8 +10,10 @@
  * chat parsing and returns the full readable text (Readability-style).
  */
 
+(function() {
+
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 19;
+var EXTRACTOR_VERSION = 20;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -2254,7 +2256,7 @@ function domDump() {
   };
 }
 
-chrome.runtime.onMessage.addListener(function(request,sender,sendResponse){
+function chatlinkMessageHandler(request,sender,sendResponse){
   if(request.type==="__CHATLINK_DIAGNOSTICS__"){sendResponse({version:EXTRACTOR_VERSION,cfgName:getCfg?getCfg()?.name:null,hasConfirmationSignal:true,hasGetCfgNameFix:true});return true;}
   if(request.type==="SEND_MESSAGE"){sendMessage(request.text||request.message,request.confirmation||"confirmed",{startNewChat:!!request.startNewChat}).then(sendResponse).catch(function(e){sendResponse({ok:false,sent:false,error:e.message});});return true;}
   if(request.type==="EXTRACT_CHAT")sendResponse(extractChat(request.sinceIndex||0));
@@ -2262,4 +2264,14 @@ chrome.runtime.onMessage.addListener(function(request,sender,sendResponse){
   if(request.type==="EXTRACT_ARTIFACTS"){extractArtifacts(request.includeLinks||false,request.maxLinks||10).then(sendResponse);return true;}
   if(request.type==="__CHATLINK_DOM_DUMP__"){sendResponse(domDump());return true;}
   return true;
-});
+}
+
+try {
+  if (window.__CHATLINK_EXTRACTOR_LISTENER__) {
+    chrome.runtime.onMessage.removeListener(window.__CHATLINK_EXTRACTOR_LISTENER__);
+  }
+} catch (e) {}
+window.__CHATLINK_EXTRACTOR_LISTENER__ = chatlinkMessageHandler;
+chrome.runtime.onMessage.addListener(chatlinkMessageHandler);
+
+})();
