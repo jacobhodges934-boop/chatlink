@@ -46,7 +46,7 @@ function structuredError(
     stage,
     message,
     retryable,
-    details: err instanceof Error && err.stack ? { stack: err.stack } : undefined,
+    // Never include stack traces — they leak local paths and runtime internals
   };
 }
 

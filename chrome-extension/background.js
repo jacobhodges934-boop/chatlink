@@ -9,7 +9,7 @@ const MCP_SERVER_BASE = "ws://127.0.0.1:27182";
 const connectionTimings = Object.freeze({
   reconnectMs: 3000,
   pingMs: 20000,
-  keepaliveAlarmMinutes: 0.3,
+  keepaliveAlarmMinutes: 0.5,
   inactiveTabFocusDelayMs: 600,
   injectionProbeIntervalMs: 100,
   injectionProbeAttempts: 10,
@@ -376,8 +376,9 @@ async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
       await ensureContentScript(tab.id);
       result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT", sinceIndex: sinceIndex ?? 0 }).catch(() => null);
     } else {
-      const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageInline }).catch(() => null);
-      result = injected?.[0]?.result;
+      // Content script also handles generic page extraction
+      await ensureContentScript(tab.id);
+      result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_PAGE" }).catch(() => null);
     }
     if (!result) { sendError(requestId, "background.get_content.content_script", "No response from content script."); return; }
     if (result.error) { sendError(requestId, "background.get_content.content_script", result.error); return; }
