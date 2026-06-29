@@ -219,6 +219,7 @@ const EXTRACTORS = {
           if (text) messages.push({ role: isHuman ? "user" : "assistant", content: text });
         }
         return { messages: messages, totalCount: turns.length, tier: 1 };
+      }
       // Tier 2: class-based (less stable)
       const humanEls = document.querySelectorAll(".human-turn, [class*='HumanTurn']");
       const aiEls = document.querySelectorAll(".ai-turn, [class*='AiTurn'], [class*='AssistantTurn']");

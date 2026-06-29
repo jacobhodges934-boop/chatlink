@@ -32,11 +32,12 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/*.test.js",
-    "prepare": "npm run build",
+    "test": "npm run build && npm run lint:extractor && node --test dist/*.test.js",
+    "prepare": "npm run build && npm run lint:extractor",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "dev:reload": "pwsh scripts/restart-mcp.ps1"
+    "dev:reload": "pwsh scripts/restart-mcp.ps1",
+    "lint:extractor": "node --check ../chrome-extension/content-scripts/extractor.js && node --check ../chrome-extension/background.js && echo extractor.js + background.js syntax OK"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
