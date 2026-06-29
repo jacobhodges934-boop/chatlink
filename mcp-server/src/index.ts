@@ -1223,7 +1223,9 @@ async function main() {
   // Lightweight HTTP sidecar for OpenCode et al. — one bridge, many clients
   const mcpForHttp = new McpServer({ name: "chatlink", version: "0.5.0" });
   registerTools(mcpForHttp);
-  const httpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const httpTransport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
   await mcpForHttp.connect(httpTransport);
 
   const sidecar = createHttpServer(async (req, res) => {
