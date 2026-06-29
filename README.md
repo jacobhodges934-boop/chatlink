@@ -139,7 +139,15 @@ After the initial conversation snapshot, polling requests only newly added messa
 - An AI coding agent: [Claude Code](https://claude.ai/code) / [OpenCode](https://opencode.ai) / [Cursor](https://cursor.com)
 - At least one AI chat tab open and signed in (ChatGPT, Gemini, DeepSeek, Grok, etc.)
 
-### One-command install
+### One-line install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jacobhodges934-boop/chatlink/master/scripts/bootstrap.sh | bash -s -- --client claude
+```
+
+Replace `claude` with `opencode` or `cursor`. That's it — the script clones, builds, and configures everything.
+
+### Or from a local clone
 
 **Windows (PowerShell):**
 ```powershell
