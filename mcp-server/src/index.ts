@@ -773,12 +773,16 @@ function registerTools(server: McpServer) {
         const oldAssistantContent = baselineAssistantContent;
 
         const startedAt = Date.now();
-        const deadline = startedAt + Math.max(delegateTimings.minimumTimeoutSeconds, timeout ?? 180) * 1000;
-        let lastAssistant = "";
+        // Hard deadline: configurable timeout. But if AI is still generating,
+        // extend beyond deadline — polling costs nothing.
+        let deadline = startedAt + Math.max(delegateTimings.minimumTimeoutSeconds, timeout ?? 180) * 1000;
+        const maxExtendedDeadline = deadline + Math.max(300, (timeout ?? 180) * 2) * 1000;
         let lastChangedAt = Date.now();
         let sawExplicitGenerating = !!(sent.confirmationSignal && sent.confirmationSignal !== "dispatched" && sent.confirmationSignal !== "timeout");
         let sawAssistantContent = false;
         let stablePolls = 0;
+        let lastAssistant = "";
+        let lastGenerationActivity = Date.now();
 
         // For startNewChat: the page changed, prefix matching doesn't apply.
         // Just return the last assistant message from the new page unconditionally.
@@ -815,7 +819,13 @@ function registerTools(server: McpServer) {
         let pollCount = 0;
         let lastUrl = targetTab.url || "";
         let prevConfidence = baselineConfidence || "";
-        while (Date.now() < deadline) {
+        while (true) {
+          // Soft timeout: keep polling if AI is active. Only exit when truly idle.
+          const quietDeadline = lastGenerationActivity + 60_000;
+          const extended = sawExplicitGenerating && Date.now() < quietDeadline;
+          const gentle = sawAssistantContent && Date.now() < maxExtendedDeadline;
+          if (Date.now() >= deadline && !extended && !gentle) break;
+
           await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
           let chat = await bridge.getChat(targetTab.tabId, incrementalSinceIndex);
@@ -836,7 +846,14 @@ function registerTools(server: McpServer) {
             chat = await bridge.getChat(targetTab.tabId);
           }
           // Only DOM-based signals can set sawExplicitGenerating
-          if (chat.isGenerating === true) sawExplicitGenerating = true;
+          if (chat.isGenerating === true) {
+            sawExplicitGenerating = true;
+            lastGenerationActivity = Date.now();
+            // AI still generating: extend deadline up to max
+            if (Date.now() + 10_000 > deadline) {
+              deadline = Math.min(Date.now() + 30_000, maxExtendedDeadline);
+            }
+          }
 
           // Check for platform error states (rate limit, login, captcha, etc.)
           if (chat.errorState && chat.errorState.detected) {
@@ -864,6 +881,7 @@ function registerTools(server: McpServer) {
           if (assistantText !== lastAssistant) {
             lastAssistant = assistantText;
             lastChangedAt = Date.now();
+            lastGenerationActivity = Date.now();
             stablePolls = 0;
             continue;
           }
@@ -903,7 +921,7 @@ function registerTools(server: McpServer) {
           }
         }
 
-        // Timeout: ALWAYS isError, never pretend partial is complete
+        // Hard timeout with partial content (reached after soft deadline extension expired)
         if (lastAssistant) {
           return {
             content: [{ type: "text", text: JSON.stringify({
