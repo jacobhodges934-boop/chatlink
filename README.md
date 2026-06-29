@@ -134,58 +134,32 @@ After the initial conversation snapshot, polling requests only newly added messa
 
 ### Requirements
 
-- Node.js 18 or newer
-- Google Chrome 116 or newer
-- Claude Code or another MCP-compatible client
-- At least one supported AI website open and signed in. The tab can be an existing conversation, or the start page shown after clicking New chat / Start new conversation.
+- Node.js 18+
+- Chrome 116+ or Edge 116+
+- [Claude Code](https://claude.ai/code)
+- At least one AI chat tab open and signed in (ChatGPT, Gemini, DeepSeek, Grok, etc.)
 
-### 1. Clone and build
+### One-command install
 
-```bash
-git clone https://github.com/jacobhodges934-boop/chatlink.git
-cd chatlink/mcp-server
-npm install
-npm run build
+**Windows (PowerShell):**
+```powershell
+.\scripts\install.ps1
 ```
 
-### 2. Load the Chrome extension
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the repository's `chrome-extension/` directory.
-5. Open a supported AI website. You may open an old conversation or click the site's New chat / Start new conversation entry and leave it on the blank composer page.
-6. Confirm that the ChatLink extension badge displays **ON**.
-
-> When extension code changes, reload ChatLink from `chrome://extensions` and refresh any open AI tabs.
-
-### 3. Register ChatLink with Claude Code
-
-Use the absolute path to the compiled server.
-
-**macOS or Linux**
-
+**macOS / Linux:**
 ```bash
-claude mcp add chatlink -- node /absolute/path/to/chatlink/mcp-server/dist/index.js
+bash scripts/install.sh
 ```
 
-**Windows PowerShell**
+The script installs dependencies, builds the MCP server, registers Claude Code, and opens the extension page.
 
-```bash
-claude mcp add chatlink -- node "C:\absolute\path\to\chatlink\mcp-server\dist\index.js"
-```
+Manual setup steps → [INSTALL.md](INSTALL.md)
 
-Restart Claude Code after registering the server.
+### Verify
 
-### 4. Verify the connection
+After installing the extension and restarting Claude Code:
 
-Open ChatGPT, Claude, Gemini, NotebookLM, or another supported platform, then ask Claude Code:
-
-> Use ChatLink to check the extension status and list my open AI tabs.
-
-You can also ask it directly:
-
-> Send this task to ChatGPT through ChatLink and return only the new response: Review the current repository architecture and identify the three highest-risk modules.
+> 使用 ChatLink 检查扩展状态
 
 ## MCP tools
 

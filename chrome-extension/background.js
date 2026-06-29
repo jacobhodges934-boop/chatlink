@@ -9,7 +9,7 @@ const MCP_SERVER_BASE = "ws://127.0.0.1:27182";
 const connectionTimings = Object.freeze({
   reconnectMs: 3000,
   pingMs: 20000,
-  keepaliveAlarmMinutes: 0.5,
+  keepaliveAlarmMinutes: 1,   // Chrome 116 minimum alarm period is 1 min (30s requires Chrome 120+)
   inactiveTabFocusDelayMs: 600,
   injectionProbeIntervalMs: 100,
   injectionProbeAttempts: 10,
