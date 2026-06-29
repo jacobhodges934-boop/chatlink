@@ -13,7 +13,7 @@
 (function() {
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 21;
+var EXTRACTOR_VERSION = 22;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -516,6 +516,33 @@ const EXTRACTORS = {
       );
       if (structural.totalCount > 0) return structural;
 
+      const zeroStateMessages = [];
+      const zeroStateSeen = new Set();
+      const zeroStateEls = document.querySelectorAll(
+        ".assistant-messages-primary-container .message-text, " +
+        "[class*='assistant-messages' i] .message-text, " +
+        ".assistant-messages-primary-container, [class*='assistant-messages' i]"
+      );
+      for (var z = 0; z < zeroStateEls.length; z++) {
+        var zeroEl = zeroStateEls[z];
+        if (!vis(zeroEl) || isRootSized(zeroEl)) continue;
+        if (zeroEl.closest && zeroEl.closest(
+          'rich-textarea, textarea, input, button, nav, header, footer, aside, ' +
+          '[role="navigation"], [role="textbox"], .send-button-container, [class*="composer" i]'
+        )) continue;
+        var zeroText = textFromFirst(zeroEl, [".message-text", "[class*='message-text' i]", "[class*='markdown' i]"]);
+        if (!zeroText || zeroStateSeen.has(zeroText)) continue;
+        zeroStateSeen.add(zeroText);
+        zeroStateMessages.push({ role: "assistant", content: zeroText });
+      }
+      if (zeroStateMessages.length > 0) {
+        return {
+          messages: zeroStateMessages.slice(sinceIndex),
+          totalCount: zeroStateMessages.length,
+          tier: 2,
+        };
+      }
+
       return fallbackFullText("user");
     },
   },
@@ -572,6 +599,7 @@ const EXTRACTORS = {
     extract(sinceIndex) {
       sinceIndex = sinceIndex || 0;
       const messages = [];
+      let tier1Messages = [];
 
       // Tier 1: aria roles — Grok marks user messages with role="region" or similar
       // Try data-testid patterns first
@@ -588,7 +616,29 @@ const EXTRACTORS = {
             : textFromFirst(el, [".response-content-markdown", "[class*='response-content' i]", "[class*='markdown' i]"]);
           if (text) messages.push({ role: isUser ? "user" : "assistant", content: text });
         }
-        return { messages: messages, totalCount: testidMessages.length, tier: 1 };
+        if (messages.some((m) => m.role === "assistant")) {
+          return { messages: messages, totalCount: testidMessages.length, tier: 1 };
+        }
+        tier1Messages = messages.slice();
+        messages.length = 0;
+      }
+
+      const assistantOnly = uniqueTextMessagesFromCandidates(
+        document.querySelectorAll(
+          "main .response-content-markdown, main [class*='response-content' i], " +
+          "main [class*='markdown' i], main [class*='prose' i]"
+        ),
+        "assistant",
+        0,
+        [".response-content-markdown", "[class*='response-content' i]", "[class*='markdown' i]", "[class*='prose' i]"]
+      );
+      if (assistantOnly.totalCount > 0) {
+        const merged = tier1Messages.concat(assistantOnly.messages);
+        return {
+          messages: merged.slice(sinceIndex),
+          totalCount: merged.length,
+          tier: 2,
+        };
       }
 
       // Tier 2: look for visually distinct bubbles and guess from layout
