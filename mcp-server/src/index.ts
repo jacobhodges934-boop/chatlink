@@ -575,13 +575,31 @@ function registerTools(server: McpServer) {
       task: z.string().min(1).describe("The coding task. Be specific about files and expected output."),
       tabId: z.number().optional().describe("Specific tab ID. Omit to auto-select by platform."),
       context: z.string().optional().describe("Optional context: file contents, error logs, git diff."),
-      timeout: z.number().optional().default(180).describe("Max seconds to wait for response."),
+      timeout: z.number().int().min(5).max(900).optional().default(180).describe("Max seconds to wait for response (5-900)."),
     },
     async ({ platform, task, tabId, context, timeout }) => {
       if (!bridge.isConnected()) {
         return notConnectedError("delegate_coding_task.preflight");
       }
       try {
+        // Scan task text for secrets before sending
+        const taskFindings = findContextSecretFindings(task);
+        if (taskFindings.length > 0) {
+          return toolError(
+            new ChatMcpError({
+              code: "UNKNOWN_ERROR",
+              stage: "delegate_coding_task.task_security",
+              message:
+                "Refusing to send delegate_coding_task because the task text appears to contain secrets (" +
+                taskFindings.join(", ") +
+                "). Remove secrets from the task and try again.",
+              retryable: false,
+              details: { findings: taskFindings },
+            }),
+            "delegate_coding_task.task_security"
+          );
+        }
+
         let prompt = task;
         if (context) {
           const sanitizedContext = await sanitizeDelegateContext(context);
