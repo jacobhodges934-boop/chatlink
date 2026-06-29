@@ -136,28 +136,28 @@ After the initial conversation snapshot, polling requests only newly added messa
 
 - Node.js 18+
 - Chrome 116+ or Edge 116+
-- [Claude Code](https://claude.ai/code)
+- An AI coding agent: [Claude Code](https://claude.ai/code) / [OpenCode](https://opencode.ai) / [Cursor](https://cursor.com)
 - At least one AI chat tab open and signed in (ChatGPT, Gemini, DeepSeek, Grok, etc.)
 
 ### One-command install
 
 **Windows (PowerShell):**
 ```powershell
-.\scripts\install.ps1
+.\scripts\install.ps1 -Client claude    # or: opencode, cursor
 ```
 
 **macOS / Linux:**
 ```bash
-bash scripts/install.sh
+bash scripts/install.sh --client claude  # or: opencode, cursor
 ```
 
-The script installs dependencies, builds the MCP server, registers Claude Code, and opens the extension page.
+The script installs dependencies, builds the MCP server, writes the MCP config for your chosen agent, and opens the extension page.
 
-Manual setup steps → [INSTALL.md](INSTALL.md)
+Detailed setup → [INSTALL.md](INSTALL.md)
 
 ### Verify
 
-After installing the extension and restarting Claude Code:
+After loading the extension and restarting your coding agent:
 
 > 使用 ChatLink 检查扩展状态
 
