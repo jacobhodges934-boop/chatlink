@@ -88,7 +88,7 @@ async function init() {
   dot.className = `dot ${isConnected ? "connected" : "disconnected"}`;
   statusText.textContent = isConnected
     ? "MCP server connected"
-    : "MCP server not running — start chatmcp-server";
+    : "MCP server not running — start chatlink-server";
 
   // Show Reconnect button only when disconnected
   reconnectBtn.disabled = isConnected;

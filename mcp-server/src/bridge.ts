@@ -195,7 +195,7 @@ export class ExtensionBridge {
       this.startResolve?.();
       this.startResolve = null;
       this.startReject = null;
-      process.stderr.write(`ChatMCP bridge listening on port ${BRIDGE_PORT}.\n`);
+      process.stderr.write(`ChatLink bridge listening on port ${BRIDGE_PORT}.\n`);
     });
   }
 
@@ -256,35 +256,35 @@ export class ExtensionBridge {
     // Step 1: Reject oversized frames
     const raw = typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString() : JSON.stringify(data);
     if (Buffer.byteLength(raw, "utf8") > MAX_WS_FRAME_BYTES) {
-      process.stderr.write("[ChatMCP] Ignoring oversized frame: " + Buffer.byteLength(raw, "utf8") + " bytes > " + MAX_WS_FRAME_BYTES + "\n");
+      process.stderr.write("[ChatLink] Ignoring oversized frame: " + Buffer.byteLength(raw, "utf8") + " bytes > " + MAX_WS_FRAME_BYTES + "\n");
       return;
     }
     let parsed;
     try { parsed = JSON.parse(raw); } catch (err) {
-      process.stderr.write("[ChatMCP] Ignoring unparseable frame: " + String(err) + "\n");
+      process.stderr.write("[ChatLink] Ignoring unparseable frame: " + String(err) + "\n");
       return;
     }
     const schemaResult = ExtensionMessageSchema.safeParse(parsed);
     if (!schemaResult.success) {
       const rid = typeof parsed.requestId === "string" ? parsed.requestId : "?";
-      process.stderr.write("[ChatMCP] Protocol validation failed (type=" + String(parsed.type) + ", requestId=" + rid + "): " + schemaResult.error.message + "\n");
+      process.stderr.write("[ChatLink] Protocol validation failed (type=" + String(parsed.type) + ", requestId=" + rid + "): " + schemaResult.error.message + "\n");
       return;
     }
     const msg = schemaResult.data;
     if (parsed.protocolVersion !== undefined && parsed.protocolVersion !== PROTOCOL_VERSION) {
-      process.stderr.write("[ChatMCP] Protocol version mismatch: got " + parsed.protocolVersion + ", expected " + PROTOCOL_VERSION + "\n");
+      process.stderr.write("[ChatLink] Protocol version mismatch: got " + parsed.protocolVersion + ", expected " + PROTOCOL_VERSION + "\n");
       try { this.client?.close(4001, "Protocol version mismatch"); } catch {}
       return;
     }
     if (msg.type === "connected") {
-      process.stderr.write("ChatMCP extension connected (v" + msg.version + ")" + "\n");
+      process.stderr.write("ChatLink extension connected (v" + msg.version + ")" + "\n");
       return;
     }
     if (msg.type === "ping") { return; }
     if (!("requestId" in msg)) return;
     const req = this.pending.get(msg.requestId);
     if (!req) {
-      process.stderr.write("[ChatMCP] No pending request found for requestId=" + msg.requestId + ", type=" + msg.type + "\n");
+      process.stderr.write("[ChatLink] No pending request found for requestId=" + msg.requestId + ", type=" + msg.type + "\n");
       return;
     }
     clearTimeout(req.timeout); this.pending.delete(msg.requestId);
@@ -306,7 +306,7 @@ export class ExtensionBridge {
 private handleExtensionMessage(msg: ExtensionMessage) {
     // Legacy dispatcher -- kept for backward compat
     if (msg.type === "connected") {
-      process.stderr.write("ChatMCP extension connected (v" + msg.version + "\n");
+      process.stderr.write("ChatLink extension connected (v" + msg.version + "\n");
       return;
     }
     if (msg.type === "ping") {
@@ -357,7 +357,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
   private validateOutgoing(msg: Record<string, unknown>): void {
     const result = ServerMessageSchema.safeParse(msg);
     if (!result.success) {
-      process.stderr.write("[ChatMCP] Outgoing message validation warning (type=" + String(msg.type) + "): " + result.error.message + "\n");
+      process.stderr.write("[ChatLink] Outgoing message validation warning (type=" + String(msg.type) + "): " + result.error.message + "\n");
     }
   }
 
@@ -376,7 +376,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
       throw this.makeError(
         "EXTENSION_DISCONNECTED",
         "bridge.send",
-        "Chrome extension is not connected. Make sure the ChatMCP extension is installed and enabled.",
+        "Chrome extension is not connected. Make sure the ChatLink extension is installed and enabled.",
         msg.requestId,
         true
       );
@@ -488,7 +488,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     return { success: result.success, platform: result.platform, method: result.method, confirmationSignal: result.confirmationSignal };
   }
 
-  async close(reason = "ChatMCP bridge is shutting down"): Promise<void> {
+  async close(reason = "ChatLink bridge is shutting down"): Promise<void> {
     if (this.state === "closing") return;
     this.state = "closing";
     // Reject all pending requests

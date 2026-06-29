@@ -1,5 +1,5 @@
 /**
- * ChatMCP content script.
+ * ChatLink content script.
  *
  * Extraction philosophy (tiered, most-specific to least):
  *   Tier 1 — Known stable selectors (data-testid, aria roles, etc.)
@@ -74,6 +74,10 @@ const EXTRACTORS = {
       '[data-testid*="generating" i]',
       '[data-testid*="stream" i]',
       '[aria-busy="true"]',
+    ],
+    complete: [
+      '.text-start', '[class*="response-received" i]',
+      '[data-testid*="complete" i]',
     ],
     errorRules: [
       {
@@ -785,6 +789,7 @@ function isGeneratingNow() {
   if (hasActiveStopSignal(cfg)) return true;
   if (hasActiveBusySignal(cfg)) return true;
   if (hasGenerationDisabledSignal(cfg)) return true;
+  if (hasCompletionSignal(cfg)) return false;
   if (!turnPulse && hasEnabledSendControl(cfg)) return false;
   if (isGenericGeneratingNow()) return true;
   if (turnPulse) return true;
@@ -1597,6 +1602,20 @@ function hasGenerationDisabledSignal(cfg) {
     if (/\b(stop|cancel|loading|streaming|generating|responding|thinking)\b|停止|中止|取消|生成|思考|回答中/.test(text)) return true;
     var busyChild = target.querySelector && target.querySelector(DEFAULT_BUSY_SEL.join(","));
     if (busyChild && isActiveBusyElement(busyChild)) return true;
+  }
+  return false;
+}
+
+function hasCompletionSignal(cfg) {
+  if (!cfg || !cfg.complete || !cfg.complete.length) return false;
+  for (var i = 0; i < cfg.complete.length; i++) {
+    var els = document.querySelectorAll(cfg.complete[i]);
+    for (var j = 0; j < els.length; j++) {
+      var el = els[j];
+      if (!vis(el)) continue;
+      var text = (el.textContent || "").toLowerCase();
+      if (/已收到应用响应|response received|application response|completion|complete|finish/i.test(text)) return true;
+    }
   }
   return false;
 }

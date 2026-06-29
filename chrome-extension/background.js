@@ -1,5 +1,5 @@
 /**
- * ChatMCP background service worker.
+ * ChatLink background service worker.
  * Connects to the local MCP server via WebSocket and handles requests.
  * Modified: added chrome.storage.local diagnostics log system.
  */
@@ -15,7 +15,7 @@ const connectionTimings = Object.freeze({
   injectionProbeAttempts: 10,
 });
 
-const KEEPALIVE_ALARM = "chatmcp-keepalive";
+const KEEPALIVE_ALARM = "chatlink-keepalive";
 const VERSION = "1.0.0";
 const MAX_LOG_ENTRIES = 200;
 
@@ -44,7 +44,7 @@ async function diagLog(event, detail) {
     });
     await chrome.storage.local.set({ diagnostics: logs, lastConnected: connected, lastUpdate: Date.now() });
   } catch (e) {
-    console.warn("[ChatMCP] Failed to write diagnostics log:", e);
+    console.warn("[ChatLink] Failed to write diagnostics log:", e);
   }
 }
 
@@ -227,34 +227,34 @@ const MAX_REQ_ID = 128;
 
 function validateServerMessage(msg) {
   if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-    console.warn("[ChatMCP] Invalid server message: not a plain object");
+    console.warn("[ChatLink] Invalid server message: not a plain object");
     return false;
   }
   if (msg.protocolVersion !== undefined && msg.protocolVersion !== PROTO_VERSION) {
-    console.warn("[ChatMCP] Protocol version mismatch:", msg.protocolVersion);
+    console.warn("[ChatLink] Protocol version mismatch:", msg.protocolVersion);
     return false;
   }
   if (typeof msg.type !== "string" || !SUPPORTED_SERVER_TYPES.has(msg.type)) {
-    console.warn("[ChatMCP] Unsupported message type:", msg.type);
+    console.warn("[ChatLink] Unsupported message type:", msg.type);
     return false;
   }
   if (typeof msg.requestId !== "string" || msg.requestId.length > MAX_REQ_ID) {
-    console.warn("[ChatMCP] Invalid or oversized requestId");
+    console.warn("[ChatLink] Invalid or oversized requestId");
     return false;
   }
   if (msg.type === "send_message") {
     if (typeof msg.text !== "string" || msg.text.length === 0) {
-      console.warn("[ChatMCP] send_message missing text");
+      console.warn("[ChatLink] send_message missing text");
       return false;
     }
     if (msg.confirmation !== undefined && msg.confirmation !== "dispatch" && msg.confirmation !== "confirmed") {
-      console.warn("[ChatMCP] Invalid confirmation value:", msg.confirmation);
+      console.warn("[ChatLink] Invalid confirmation value:", msg.confirmation);
       return false;
     }
   }
   if ((msg.type === "get_chat" || msg.type === "get_page" || msg.type === "get_artifacts") && msg.tabId !== undefined) {
     if (!Number.isInteger(msg.tabId) || msg.tabId <= 0) {
-      console.warn("[ChatMCP] Invalid tabId:", msg.tabId);
+      console.warn("[ChatLink] Invalid tabId:", msg.tabId);
       return false;
     }
   }
@@ -267,7 +267,6 @@ function handleServerMessage(raw) {
   }
   const msg = raw;
   switch (msg.type) {
-  switch (msg.type) {
     case "list_ai_tabs":    return handleListAiTabs(msg.requestId);
     case "list_all_tabs":   return handleListAllTabs(msg.requestId);
     case "get_chat":        return handleGetContent(msg.requestId, msg.tabId, "chat");
@@ -275,7 +274,7 @@ function handleServerMessage(raw) {
     case "get_artifacts":   return handleGetArtifacts(msg.requestId, msg.tabId, msg.includeLinks ?? false, msg.maxLinks ?? 10);
     case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId, msg.confirmation);
     default:
-      console.warn("[ChatMCP] Unknown message type:", msg.type);
+      console.warn("[ChatLink] Unknown message type:", msg.type);
   }
 }
 
