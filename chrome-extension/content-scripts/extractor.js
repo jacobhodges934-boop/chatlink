@@ -2034,7 +2034,7 @@ const DEFAULT_BUSY_SEL = [
 function norm(v){var s=String(v||"");s=s.replace(/[\r\n]+/g,"\n");s=s.replace(/\s+/g," ");return s.trim();}
 function readComp(input){return(input instanceof HTMLTextAreaElement||input instanceof HTMLInputElement)?input.value:(input.innerText||input.textContent||"");}
 
-function waitTick(){return new Promise(function(r){var done=false;var t=setTimeout(function f(){if(done)return;done=true;clearTimeout(t);r();},50);requestAnimationFrame(f);});}
+function waitTick(){return new Promise(function(r){var done=false;var t=null;function finish(){if(done)return;done=true;if(t)clearTimeout(t);r();}t=setTimeout(finish,50);requestAnimationFrame(finish);});}
 
 async function waitBtnReady(input,btn,max){max=max||MAX_BUTTON_READY_FRAMES;var b=btn||null;if(!b||b.disabled===false)return b;for(var i=0;i<max;i++){await waitTick();b=findSend(input)||b;if(b&&!b.disabled)return b;}return b;}
 
