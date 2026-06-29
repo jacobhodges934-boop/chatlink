@@ -29,6 +29,7 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
+  tabId?: number;
 }
 
 type BridgeState = "idle" | "starting" | "ready" | "failed" | "closing";
@@ -289,12 +290,15 @@ export class ExtensionBridge {
     if (msg.type === "tab_closed" || msg.type === "tab_navigated") {
       const eventName = msg.type === "tab_closed" ? "TAB_CLOSED" : "TAB_NAVIGATED";
       process.stderr.write("[ChatLink] Tab event: " + eventName + " tabId=" + msg.tabId + "\n");
-      // Reject pending requests for this tab with a clear error
+      // Reject only pending requests for this specific tab
+      const closedTabId = msg.tabId;
       for (const [id, req] of this.pending) {
+        // Only reject requests that target the closed/navigated tab (or untargeted requests as a safety net)
+        if (req.tabId !== undefined && req.tabId !== closedTabId) continue;
         clearTimeout(req.timeout);
         req.reject(this.makeError("TAB_NOT_FOUND", "bridge.tab_lifecycle",
-          "Tab " + msg.tabId + " was " + (msg.type === "tab_closed" ? "closed" : "navigated away"), id, false,
-          { tabId: msg.tabId, event: eventName }));
+          "Tab " + closedTabId + " was " + (msg.type === "tab_closed" ? "closed" : "navigated away"), id, false,
+          { tabId: closedTabId, event: eventName }));
         this.pending.delete(id);
       }
       return;
@@ -406,7 +410,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     return `req_${++this.requestCounter}_${Date.now()}`;
   }
 
-  private request<T>(msg: Record<string, unknown>, responseSchema: z.ZodType<T>, expectedType: string, timeoutMs = 15000): Promise<T> {
+  private request<T>(msg: Record<string, unknown>, responseSchema: z.ZodType<T>, expectedType: string, timeoutMs = 15000, tabId?: number): Promise<T> {
     const requestId = this.makeRequestId();
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -429,6 +433,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
         resolve: resolve as (v: unknown) => void,
         reject,
         timeout,
+        tabId,
       });
 
       try {
@@ -470,7 +475,8 @@ private handleExtensionMessage(msg: ExtensionMessage) {
       { type: "get_chat", tabId, sinceIndex },
       ChatResultSchema,
       "chat_result",
-      20000
+      20000,
+      tabId
     );
     return result.content;
   }
@@ -480,7 +486,8 @@ private handleExtensionMessage(msg: ExtensionMessage) {
       { type: "get_page", tabId },
       PageResultSchema,
       "page_result",
-      20000
+      20000,
+      tabId
     );
     return result.content;
   }
@@ -501,7 +508,8 @@ private handleExtensionMessage(msg: ExtensionMessage) {
       { type: "send_message", tabId, text, platform, operationId: opId, confirmation },
       SendMessageResultSchema,
       "send_message_result",
-      25000
+      25000,
+      tabId
     );
     return { success: result.success, platform: result.platform, method: result.method, confirmationSignal: result.confirmationSignal };
   }

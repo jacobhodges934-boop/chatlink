@@ -107,10 +107,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.url) return;
   if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
-  // Notify if AI tab navigated away from known AI host
-  const wasAI = AI_HOSTNAMES.has(parseHostname(tab.url || ""));
-  const isAI = AI_HOSTNAMES.has(parseHostname(changeInfo.url));
-  if (wasAI && !isAI) {
+  // Notify if AI tab navigated to a different host (AI→non-AI or AI→AI switch)
+  const oldHost = parseHostname(tab.url || "");
+  const newHost = parseHostname(changeInfo.url);
+  if (oldHost && oldHost !== newHost) {
     send({ type: "tab_navigated", tabId, url: changeInfo.url });
   }
 });
