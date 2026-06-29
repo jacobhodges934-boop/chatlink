@@ -11,10 +11,13 @@ import { normalizeForComparison, extractNewAssistantText } from "./completion-tr
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 
 const HTTP_PORT = 27183;
 const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
+
+const HTTP_TOKEN = randomBytes(32).toString("hex");
+const MAX_MCP_BODY_BYTES = 1_048_576; // 1 MB
 
 const bridge = new ExtensionBridge();
 
@@ -64,6 +67,27 @@ function notConnectedError(stage: string) {
     }),
     stage
   );
+}
+
+function validateBearerToken(req: IncomingMessage): { valid: boolean; reason?: string } {
+  const auth = req.headers["authorization"];
+  if (!auth) {
+    return { valid: false, reason: "Missing Authorization header. Use: Authorization: Bearer <token>" };
+  }
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return { valid: false, reason: "Invalid Authorization format. Use: Bearer <token>" };
+  }
+  const provided = match[1];
+  if (Buffer.byteLength(provided, "utf8") !== Buffer.byteLength(HTTP_TOKEN, "utf8")) {
+    return { valid: false, reason: "Invalid token" };
+  }
+  try {
+    const valid = timingSafeEqual(Buffer.from(provided), Buffer.from(HTTP_TOKEN));
+    return valid ? { valid: true } : { valid: false, reason: "Invalid token" };
+  } catch {
+    return { valid: false, reason: "Invalid token" };
+  }
 }
 
 function globPatternToRegExp(pattern: string): RegExp {
@@ -722,7 +746,12 @@ function registerTools(server: McpServer) {
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
-          const chat = await bridge.getChat(targetTab.tabId);
+          // Incremental extraction: only fetch new messages since baseline
+          let chat = await bridge.getChat(targetTab.tabId, baselineMessages.length);
+          // If messages were deleted (totalMessageCount < sinceIndex), redo full extraction
+          if (chat.totalMessageCount != null && chat.totalMessageCount < baselineMessages.length) {
+            chat = await bridge.getChat(targetTab.tabId);
+          }
           // Only DOM-based signals can set sawExplicitGenerating
           if (chat.isGenerating === true) sawExplicitGenerating = true;
 
@@ -965,14 +994,49 @@ async function main() {
   const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url !== "/mcp") {
       res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found. ChatMCP MCP endpoint is at /mcp");
+      res.end("Not found. ChatLink MCP endpoint is at /mcp");
       return;
     }
 
-    // Collect body for POST requests
+    if (req.method !== "POST" && req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "text/plain", "Allow": "GET, POST" });
+      res.end("Method not allowed. Use POST for JSON-RPC or GET for SSE stream.");
+      return;
+    }
+
+    const authResult = validateBearerToken(req);
+    if (!authResult.valid) {
+      res.writeHead(401, {
+        "Content-Type": "text/plain",
+        "WWW-Authenticate": 'Bearer realm="chatlink-mcp"',
+      });
+      res.end(authResult.reason ?? "Unauthorized");
+      return;
+    }
+
+    // Collect body with size limit
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+    let bodyTooLarge = false;
+
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_MCP_BODY_BYTES) {
+        bodyTooLarge = true;
+        req.destroy();
+      }
+      if (!bodyTooLarge) {
+        chunks.push(chunk);
+      }
+    });
+
     req.on("end", async () => {
+      if (bodyTooLarge) {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("Request body too large. Maximum size is 1 MB.");
+        return;
+      }
+
       let parsedBody: unknown;
       if (chunks.length > 0) {
         try {
@@ -990,9 +1054,10 @@ async function main() {
 
   httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
     process.stderr.write(
-      `ChatMCP HTTP server running on http://127.0.0.1:${HTTP_PORT}/mcp\n` +
+      `ChatLink HTTP server running on http://127.0.0.1:${HTTP_PORT}/mcp\n` +
       `Multiple clients (OpenCode, Copilot, Cursor) can connect simultaneously.\n` +
       `Waiting for Chrome extension on port 27182.\n` +
+      `\nAuth token (set as Bearer token in MCP client config): ${HTTP_TOKEN}\n` +
       `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
     );
   });

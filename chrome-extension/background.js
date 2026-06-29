@@ -269,7 +269,7 @@ function handleServerMessage(raw) {
   switch (msg.type) {
     case "list_ai_tabs":    return handleListAiTabs(msg.requestId);
     case "list_all_tabs":   return handleListAllTabs(msg.requestId);
-    case "get_chat":        return handleGetContent(msg.requestId, msg.tabId, "chat");
+    case "get_chat":        return handleGetContent(msg.requestId, msg.tabId, "chat", msg.sinceIndex);
     case "get_page":        return handleGetContent(msg.requestId, msg.tabId, "page");
     case "get_artifacts":   return handleGetArtifacts(msg.requestId, msg.tabId, msg.includeLinks ?? false, msg.maxLinks ?? 10);
     case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId, msg.confirmation);
@@ -305,7 +305,7 @@ async function handleListAiTabs(requestId) {
   } catch (err) { sendError(requestId, "background.list_ai_tabs", err); }
 }
 
-async function handleGetContent(requestId, targetTabId, mode) {
+async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
   try {
     let tab;
     if (targetTabId) {
@@ -329,7 +329,7 @@ async function handleGetContent(requestId, targetTabId, mode) {
     if (mode === "chat") {
       // Content script is authoritative — has per-platform extractors, stop/busy/error detection
       await ensureContentScript(tab.id);
-      result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT" }).catch(() => null);
+      result = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_CHAT", sinceIndex: sinceIndex ?? 0 }).catch(() => null);
     } else {
       const injected = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageInline }).catch(() => null);
       result = injected?.[0]?.result;
@@ -343,7 +343,7 @@ async function handleGetContent(requestId, targetTabId, mode) {
     if (result.type === "page") {
       send({ type: "page_result", requestId, content: { tabId: tab.id, platform, url: result.url, title: result.title, text: result.text, extractedAt: result.extractedAt } });
     } else {
-      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating, errorState: result.errorState } });
+      send({ type: "chat_result", requestId, content: { tabId: tab.id, platform: result.platform ?? platform, url: result.url, title: result.title, messages: result.messages, extractedAt: result.extractedAt, isGenerating: result.isGenerating, errorState: result.errorState, totalMessageCount: result.totalMessageCount } });
     }
   } catch (err) { sendError(requestId, "background.get_content", err); }
 }

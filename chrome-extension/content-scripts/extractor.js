@@ -128,7 +128,8 @@ const EXTRACTORS = {
     detect: () =>
       location.hostname === "chat.openai.com" || location.hostname === "chatgpt.com",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: conversation turn articles (most stable)
@@ -136,14 +137,15 @@ const EXTRACTORS = {
         'article[data-testid^="conversation-turn"]'
       );
       if (articles.length > 0) {
-        for (const article of articles) {
+        for (var i = sinceIndex; i < articles.length; i++) {
+          var article = articles[i];
           const roleEl = article.querySelector("[data-message-author-role]");
           const role = roleEl?.getAttribute("data-message-author-role");
           if (role !== "user" && role !== "assistant") continue;
           const text = textOf(article);
           if (text) messages.push({ role, content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: articles.length };
       }
 
       // Tier 2: data-message-author-role directly on any element
@@ -201,7 +203,8 @@ const EXTRACTORS = {
     ],
     detect: () => location.hostname === "claude.ai",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: testid attributes
@@ -209,12 +212,13 @@ const EXTRACTORS = {
         '[data-testid="human-turn"], [data-testid="ai-turn"]'
       );
       if (turns.length > 0) {
-        for (const turn of turns) {
+        for (var i = sinceIndex; i < turns.length; i++) {
+          var turn = turns[i];
           const isHuman = turn.getAttribute("data-testid") === "human-turn";
           const text = textOf(turn);
           if (text) messages.push({ role: isHuman ? "user" : "assistant", content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: turns.length };
       }
 
       // Tier 2: class-based (less stable)
@@ -281,7 +285,8 @@ const EXTRACTORS = {
     ],
     detect: () => location.hostname === "gemini.google.com",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: Angular custom elements (very stable for Gemini)
@@ -298,11 +303,12 @@ const EXTRACTORS = {
           const pos = a.el.compareDocumentPosition(b.el);
           return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
         });
-        for (const { el, role } of allTurns) {
-          const text = textOf(el);
-          if (text) messages.push({ role, content: text });
+        for (var i = sinceIndex; i < allTurns.length; i++) {
+          var turn = allTurns[i];
+          const text = textOf(turn.el);
+          if (text) messages.push({ role: turn.role, content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: allTurns.length };
       }
 
       return fallbackFullText("user");
@@ -349,7 +355,8 @@ const EXTRACTORS = {
     ],
     detect: () => location.hostname === "grok.com",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: aria roles — Grok marks user messages with role="region" or similar
@@ -358,13 +365,14 @@ const EXTRACTORS = {
         "[data-testid*='message'], [data-testid*='turn'], [data-testid*='response']"
       );
       if (testidMessages.length > 0) {
-        for (const el of testidMessages) {
+        for (var i = sinceIndex; i < testidMessages.length; i++) {
+          var el = testidMessages[i];
           const id = el.getAttribute("data-testid") ?? "";
           const isUser = id.includes("user") || id.includes("human");
           const text = textOf(el);
           if (text) messages.push({ role: isUser ? "user" : "assistant", content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: testidMessages.length };
       }
 
       // Tier 2: look for visually distinct bubbles and guess from layout
@@ -438,7 +446,8 @@ const EXTRACTORS = {
     ],
     detect: () => location.hostname === "chat.deepseek.com",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: DeepSeek renders user messages and assistant responses in
@@ -458,11 +467,12 @@ const EXTRACTORS = {
           const pos = a.el.compareDocumentPosition(b.el);
           return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
         });
-        for (const { el, role } of allTurns) {
-          const text = textOf(el);
-          if (text) messages.push({ role, content: text });
+        for (var i = sinceIndex; i < allTurns.length; i++) {
+          var turn = allTurns[i];
+          const text = textOf(turn.el);
+          if (text) messages.push({ role: turn.role, content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: allTurns.length };
       }
 
       // Tier 2: alternating pattern in the chat container
@@ -533,20 +543,22 @@ const EXTRACTORS = {
     ],
     detect: () => location.hostname === "chat.mistral.ai",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: role attributes and testids
       const roleEls = document.querySelectorAll("[data-role], [data-message-role]");
       if (roleEls.length > 0) {
-        for (const el of roleEls) {
+        for (var i = sinceIndex; i < roleEls.length; i++) {
+          var el = roleEls[i];
           const role =
             el.getAttribute("data-role") || el.getAttribute("data-message-role");
           const normalized = role === "user" || role === "human" ? "user" : "assistant";
           const text = textOf(el);
           if (text) messages.push({ role: normalized, content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: roleEls.length };
       }
 
       // Tier 2: class-based
@@ -628,7 +640,8 @@ const EXTRACTORS = {
     detect: () =>
       location.hostname === "perplexity.ai" || location.hostname === "www.perplexity.ai",
 
-    extract() {
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
       const messages = [];
 
       // Tier 1: Perplexity marks queries with a specific heading/div
@@ -649,11 +662,12 @@ const EXTRACTORS = {
           const pos = a.el.compareDocumentPosition(b.el);
           return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
         });
-        for (const { el, role } of allTurns) {
-          const text = textOf(el);
-          if (text) messages.push({ role, content: text });
+        for (var i = sinceIndex; i < allTurns.length; i++) {
+          var turn = allTurns[i];
+          const text = textOf(turn.el);
+          if (text) messages.push({ role: turn.role, content: text });
         }
-        if (messages.length > 0) return messages;
+        return { messages: messages, totalCount: allTurns.length };
       }
 
       // Tier 2: section-based — Perplexity groups each Q&A in a section
@@ -945,24 +959,30 @@ function fallbackFullText(defaultRole) {
 // Entry point — called by background.js via executeScript
 // ---------------------------------------------------------------------------
 
-function extractChat() {
+function extractChat(sinceIndex) {
+  sinceIndex = sinceIndex || 0;
   ensureGenericGenerationObserver();
   for (const [name, ext] of Object.entries(EXTRACTORS)) {
     if (ext.detect()) {
       try {
-        const messages = ext.extract();
+        var result = ext.extract(sinceIndex);
+        var messages = result.messages || result;
+        var totalCount = result.totalCount;
+        // If extract returned a plain array (old-style), totalCount = messages.length + sinceIndex (approximate)
+        if (!totalCount && Array.isArray(result)) totalCount = result.length + sinceIndex;
         return {
           type: "chat",
           platform: name,
           url: location.href,
           title: document.title,
-          messages,
+          messages: messages,
           extractedAt: new Date().toISOString(),
           isGenerating: isGeneratingNow(),
           errorState: detectErrorState(ext),
+          totalMessageCount: totalCount,
         };
       } catch (err) {
-        return { error: `Extraction failed on ${name}: ${err.message}` };
+        return { error: "Extraction failed on " + name + ": " + err.message };
       }
     }
   }
@@ -1803,7 +1823,7 @@ async function sendMessage(text,confirmation){
 chrome.runtime.onMessage.addListener(function(request,sender,sendResponse){
   if(request.type==="__CHATLINK_DIAGNOSTICS__"){sendResponse({version:EXTRACTOR_VERSION,cfgName:getCfg?getCfg()?.name:null,hasConfirmationSignal:true,hasGetCfgNameFix:true});return true;}
   if(request.type==="SEND_MESSAGE"){sendMessage(request.text||request.message,request.confirmation||"confirmed").then(sendResponse).catch(function(e){sendResponse({ok:false,sent:false,error:e.message});});return true;}
-  if(request.type==="EXTRACT_CHAT")sendResponse(extractChat());
+  if(request.type==="EXTRACT_CHAT")sendResponse(extractChat(request.sinceIndex||0));
   if(request.type==="EXTRACT_PAGE")sendResponse(extractPage());
   if(request.type==="EXTRACT_ARTIFACTS"){extractArtifacts(request.includeLinks||false,request.maxLinks||10).then(sendResponse);return true;}
   return true;

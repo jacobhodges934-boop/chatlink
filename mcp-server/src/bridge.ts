@@ -452,9 +452,9 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     return result.tabs;
   }
 
-  async getChat(tabId?: number): Promise<ChatContent> {
+  async getChat(tabId?: number, sinceIndex?: number): Promise<ChatContent> {
     const result = await this.request(
-      { type: "get_chat", tabId },
+      { type: "get_chat", tabId, sinceIndex },
       ChatResultSchema,
       "chat_result",
       20000

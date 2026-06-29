@@ -45,6 +45,7 @@ export const ChatContentSchema = z.object({
   extractedAt: z.string(),
   isGenerating: z.boolean().optional(),
   errorState: PlatformErrorStateSchema.optional(),
+  totalMessageCount: z.number().int().nonnegative().optional(),
 });
 
 export const PageContentSchema = z.object({
@@ -77,7 +78,7 @@ export const ArtifactsContentSchema = z.object({
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("list_ai_tabs"), requestId: RequestIdSchema }).strict(),
   z.object({ type: z.literal("list_all_tabs"), requestId: RequestIdSchema }).strict(),
-  z.object({ type: z.literal("get_chat"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional() }).strict(),
+  z.object({ type: z.literal("get_chat"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), sinceIndex: z.number().int().nonnegative().optional() }).strict(),
   z.object({ type: z.literal("get_page"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional() }).strict(),
   z.object({ type: z.literal("get_artifacts"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), includeLinks: z.boolean().optional(), maxLinks: z.number().int().positive().max(100).optional() }).strict(),
   z.object({ type: z.literal("send_message"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), text: z.string().min(1).max(MAX_SEND_TEXT_LENGTH), platform: z.string().max(128).optional(), operationId: z.string().max(128).optional(), confirmation: z.enum(["dispatch", "confirmed"]).optional() }).strict(),
