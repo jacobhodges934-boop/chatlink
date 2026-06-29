@@ -17,15 +17,15 @@ export const delegateTimings = {
   /** How many fast polls before switching to slow. */
   fastPollCount: 6,
   /** Quiet period for explicit-end signal before final re-read. */
-  explicitEndQuietMs: 800,
+  explicitEndQuietMs: 3000,
   /** Delay before final re-read. */
   finalReadDelayMs: 500,
   /** Minimum content stability for the fallback path. */
-  contentStabilityMs: 3_500,
+  contentStabilityMs: 5000,
   /** Consecutive stable polls needed for explicit-end. */
-  explicitEndStablePolls: 1,
+  explicitEndStablePolls: 2,
   /** Consecutive stable polls needed for content-stability. */
-  contentStabilityPolls: 2,
+  contentStabilityPolls: 3,
   /** Minimum deadline (seconds). */
   minimumTimeoutSeconds: 5,
 } as const;

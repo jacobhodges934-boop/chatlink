@@ -413,6 +413,8 @@ const EXTRACTORS = {
   gemini: {
     input: ['rich-textarea div[contenteditable="true"]','div[contenteditable="true"][role="textbox"]'],
     send: [
+      '[data-test-id="send-button-container"] gem-icon-button',
+      '[data-test-id="send-button-container"] .send-button',
       'button[aria-label*="send message" i]',
       'button[aria-label*="send" i]',
       'button[aria-label*="发送" i]',
@@ -516,24 +518,22 @@ const EXTRACTORS = {
       );
       if (structural.totalCount > 0) return structural;
 
+      // Zero-state: extract whole response containers as single assistant turns,
+      // NOT individual .message-text fragments (they are parts of one response)
       const zeroStateMessages = [];
-      const zeroStateSeen = new Set();
-      const zeroStateEls = document.querySelectorAll(
-        ".assistant-messages-primary-container .message-text, " +
-        "[class*='assistant-messages' i] .message-text, " +
+      const zeroStateRoots = document.querySelectorAll(
         ".assistant-messages-primary-container, [class*='assistant-messages' i]"
       );
-      for (var z = 0; z < zeroStateEls.length; z++) {
-        var zeroEl = zeroStateEls[z];
-        if (!vis(zeroEl) || isRootSized(zeroEl)) continue;
-        if (zeroEl.closest && zeroEl.closest(
+      for (var z = 0; z < zeroStateRoots.length; z++) {
+        var root = zeroStateRoots[z];
+        if (!vis(root)) continue;
+        if (root.closest &&
           'rich-textarea, textarea, input, button, nav, header, footer, aside, ' +
           '[role="navigation"], [role="textbox"], .send-button-container, [class*="composer" i]'
-        )) continue;
-        var zeroText = textFromFirst(zeroEl, [".message-text", "[class*='message-text' i]", "[class*='markdown' i]"]);
-        if (!zeroText || zeroStateSeen.has(zeroText)) continue;
-        zeroStateSeen.add(zeroText);
-        zeroStateMessages.push({ role: "assistant", content: zeroText });
+        ) continue;
+        var rootText = textOf(root).replace(/^(Gemini\s*(说|says)?|Google Gemini)\s*/i, "").trim();
+        if (!rootText) continue;
+        zeroStateMessages.push({ role: "assistant", content: rootText });
       }
       if (zeroStateMessages.length > 0) {
         return {
@@ -599,10 +599,8 @@ const EXTRACTORS = {
     extract(sinceIndex) {
       sinceIndex = sinceIndex || 0;
       const messages = [];
-      let tier1Messages = [];
 
-      // Tier 1: aria roles — Grok marks user messages with role="region" or similar
-      // Try data-testid patterns first
+      // Tier 1: data-testid patterns — Grok marks with user-message / assistant-message
       const testidMessages = document.querySelectorAll(
         "[data-testid*='message'], [data-testid*='turn'], [data-testid*='response']"
       );
@@ -616,29 +614,8 @@ const EXTRACTORS = {
             : textFromFirst(el, [".response-content-markdown", "[class*='response-content' i]", "[class*='markdown' i]"]);
           if (text) messages.push({ role: isUser ? "user" : "assistant", content: text });
         }
-        if (messages.some((m) => m.role === "assistant")) {
-          return { messages: messages, totalCount: testidMessages.length, tier: 1 };
-        }
-        tier1Messages = messages.slice();
-        messages.length = 0;
-      }
-
-      const assistantOnly = uniqueTextMessagesFromCandidates(
-        document.querySelectorAll(
-          "main .response-content-markdown, main [class*='response-content' i], " +
-          "main [class*='markdown' i], main [class*='prose' i]"
-        ),
-        "assistant",
-        0,
-        [".response-content-markdown", "[class*='response-content' i]", "[class*='markdown' i]", "[class*='prose' i]"]
-      );
-      if (assistantOnly.totalCount > 0) {
-        const merged = tier1Messages.concat(assistantOnly.messages);
-        return {
-          messages: merged.slice(sinceIndex),
-          totalCount: merged.length,
-          tier: 2,
-        };
+        // Return Tier 1 even without assistant — assistant may appear later in streaming
+        return { messages: messages, totalCount: testidMessages.length, tier: 1 };
       }
 
       // Tier 2: look for visually distinct bubbles and guess from layout
@@ -1108,10 +1085,12 @@ function isGeneratingNow() {
   if (hasActiveStopSignal(cfg)) return true;
   if (hasActiveBusySignal(cfg)) return true;
   if (hasGenerationDisabledSignal(cfg)) return true;
-  if (hasCompletionSignal(cfg)) return false;
-  if (!turnPulse && hasEnabledSendControl(cfg)) return false;
+  // DOM mutations take priority over control signals:
+  // a temporarily-enabled send button during route switch doesn't mean completion
   if (isGenericGeneratingNow()) return true;
   if (turnPulse) return true;
+  if (hasCompletionSignal(cfg)) return false;
+  if (hasEnabledSendControl(cfg)) return false;
   return false;
 }
 
@@ -1971,7 +1950,8 @@ function hasCompletionSignal(cfg) {
       var el = els[j];
       if (!vis(el)) continue;
       var text = (el.textContent || "").toLowerCase();
-      if (/已收到应用响应|response received|application response|completion|complete|finish/i.test(text)) return true;
+      // "已收到应用响应" / "response received" means still processing, NOT finished
+      if (/completion|complete|finish/i.test(text) && !/已收到应用响应|response received|application response/i.test(text)) return true;
     }
   }
   return false;
@@ -2199,12 +2179,22 @@ async function sendMessage(text,confirmation,options){
   var input=newInput||findInput();
   if(!input)throw new Error("找不到输入框: "+location.href);
   var btn=await fillInput(input,text);
+  // Give Angular/React frameworks time to process input and enable send controls
+  if (options.startNewChat) { await waitTick(); await waitTick(); }
   var method,sendAction;
-  if(btn){method="button";sendAction=function(){btn.click();};}
-  else{
+  var cfg=getCfg?getCfg():{};
+  // Gemini: Angular Material button ignores synthetic clicks. Use Enter on input.
+  if(cfg.name==="gemin" && input.tagName!=="TEXTAREA" && input.tagName!=="INPUT"){
+    method="enter";sendAction=function(){
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",which:13,keyCode:13,bubbles:true,cancelable:true,composed:true}));
+    };
+  } else if(btn){
+    method="button";sendAction=function(){btn.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true}));};
+  } else {
     var form=input.closest("form");
     if(form&&form.requestSubmit){method="form";sendAction=function(){form.requestSubmit();};}
-    else{method="enter";sendAction=function(){input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:13,bubbles:true}));};}
+    else{method="enter";sendAction=function(){input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:13,bubbles:true,composed:true}));};}
   }
   var cfg=getCfg?getCfg():{};
   primeAssistantTurnProbe();

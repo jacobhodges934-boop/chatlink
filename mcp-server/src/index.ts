@@ -708,6 +708,7 @@ function registerTools(server: McpServer) {
           content: normalizeForComparison(m.content),
         }));
         const baselineAssistantContent = [...baselineMessages].reverse().find(m => m.role === "assistant")?.content ?? "";
+        let baselineConfidence = baseline.extractionMeta?.confidence;
 
         function getNewAssistantText(chat: Awaited<ReturnType<typeof bridge.getChat>>): string {
           const messages = chat.messages;
@@ -769,23 +770,33 @@ function registerTools(server: McpServer) {
           );
         }
 
+        const oldAssistantContent = baselineAssistantContent;
+
         const startedAt = Date.now();
         const deadline = startedAt + Math.max(delegateTimings.minimumTimeoutSeconds, timeout ?? 180) * 1000;
         let lastAssistant = "";
         let lastChangedAt = Date.now();
-        // sawExplicitGenerating: ONLY set by DOM signals (isGenerating===true or "generation_started" confirmation)
-        // This is distinct from "content appeared" — content can appear without DOM detection
         let sawExplicitGenerating = !!(sent.confirmationSignal && sent.confirmationSignal !== "dispatched" && sent.confirmationSignal !== "timeout");
         let sawAssistantContent = false;
         let stablePolls = 0;
 
-        var baselineConfidence = baseline.extractionMeta?.confidence;
+        // For startNewChat: the page changed, prefix matching doesn't apply.
+        // Just return the last assistant message from the new page unconditionally.
+        function getNewAssistantAfterNewChat(chat: Awaited<ReturnType<typeof bridge.getChat>>): string {
+          for (let mi = chat.messages.length - 1; mi >= 0; mi--) {
+            if (chat.messages[mi].role === "assistant" && chat.messages[mi].content.trim()) {
+              return chat.messages[mi].content.trim();
+            }
+          }
+          return "";
+        }
+
         var confidenceWarning = baselineConfidence === "low"
           ? "警告：适配器回退到全页文本提取，数据可能被污染（包含UI文字、侧边栏等非对话内容）。"
           : baselineConfidence === "medium"
             ? "提示：适配器使用备用选择器提取，数据质量可能不如主选择器。"
             : null;
-        const incrementalSinceIndex = baselineConfidence === "low" ? 0 : baselineMessages.length;
+        const incrementalSinceIndex = (startNewChat || baselineConfidence === "low") ? 0 : baselineMessages.length;
 
         function wrapResult(text: string, reason: string): { content: { type: "text"; text: string }[] } {
           var result: Record<string, unknown> = {
@@ -802,11 +813,24 @@ function registerTools(server: McpServer) {
         }
 
         let pollCount = 0;
+        let lastUrl = targetTab.url || "";
+        let prevConfidence = baselineConfidence || "";
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
-          // Incremental extraction: only fetch new messages since a trusted baseline.
           let chat = await bridge.getChat(targetTab.tabId, incrementalSinceIndex);
+          // Route change during polling: reset stability (page transition in progress)
+          if (chat.url && chat.url !== lastUrl) {
+            lastUrl = chat.url;
+            stablePolls = 0;
+            lastChangedAt = Date.now();
+          }
+          // Extraction upgrade (Tier 2→1): new DOM structure appeared, reset stability
+          if (chat.extractionMeta && prevConfidence === "medium" && chat.extractionMeta.confidence === "high") {
+            stablePolls = 0;
+            lastChangedAt = Date.now();
+          }
+          prevConfidence = chat.extractionMeta?.confidence || prevConfidence;
           // If messages were deleted (totalMessageCount < sinceIndex), redo full extraction
           if (chat.totalMessageCount != null && chat.totalMessageCount < incrementalSinceIndex) {
             chat = await bridge.getChat(targetTab.tabId);
@@ -829,7 +853,9 @@ function registerTools(server: McpServer) {
             };
           }
 
-          const assistantText = getNewAssistantText(chat);
+          const assistantText = startNewChat
+            ? getNewAssistantAfterNewChat(chat)
+            : getNewAssistantText(chat);
 
           if (!assistantText) continue;
           sawAssistantContent = true;
@@ -845,10 +871,12 @@ function registerTools(server: McpServer) {
 
           // Strategy A: explicit DOM generation-end signal → short quiet period → re-read
           // REQUIRES sawExplicitGenerating (real DOM signal), not just content appearing
-          if (sawExplicitGenerating && chat.isGenerating !== true && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
+          if (sawExplicitGenerating && (startNewChat || chat.isGenerating !== true) && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
             await new Promise(r => setTimeout(r, delegateTimings.finalReadDelayMs));
             const finalChat = await bridge.getChat(targetTab.tabId);
-            const finalText = getNewAssistantText(finalChat);
+            const finalText = startNewChat
+              ? getNewAssistantAfterNewChat(finalChat)
+              : getNewAssistantText(finalChat);
             if (!finalText || finalText === lastAssistant) {
               return wrapResult(lastAssistant, "explicit_end");
             }
@@ -859,9 +887,13 @@ function registerTools(server: McpServer) {
           }
 
           // Strategy B: content stability — works without DOM signals, longer wait
-          if (sawAssistantContent && chat.isGenerating !== true && stablePolls >= delegateTimings.contentStabilityPolls && Date.now() - lastChangedAt >= delegateTimings.contentStabilityMs) {
+          // For startNewChat, isGenerating may stay true even after completion (Grok)
+          const generatingDone = startNewChat ? true : chat.isGenerating !== true;
+          if (sawAssistantContent && generatingDone && stablePolls >= delegateTimings.contentStabilityPolls && Date.now() - lastChangedAt >= delegateTimings.contentStabilityMs) {
             const finalChat = await bridge.getChat(targetTab.tabId);
-            const finalText = getNewAssistantText(finalChat);
+            const finalText = startNewChat
+              ? getNewAssistantAfterNewChat(finalChat)
+              : getNewAssistantText(finalChat);
             if (finalText === lastAssistant) {
               return wrapResult(lastAssistant, "content_stability");
             }
