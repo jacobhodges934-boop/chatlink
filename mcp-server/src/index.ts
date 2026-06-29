@@ -785,6 +785,7 @@ function registerTools(server: McpServer) {
           : baselineConfidence === "medium"
             ? "提示：适配器使用备用选择器提取，数据质量可能不如主选择器。"
             : null;
+        const incrementalSinceIndex = baselineConfidence === "low" ? 0 : baselineMessages.length;
 
         function wrapResult(text: string, reason: string): { content: { type: "text"; text: string }[] } {
           var result: Record<string, unknown> = {
@@ -804,10 +805,10 @@ function registerTools(server: McpServer) {
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
-          // Incremental extraction: only fetch new messages since baseline
-          let chat = await bridge.getChat(targetTab.tabId, baselineMessages.length);
+          // Incremental extraction: only fetch new messages since a trusted baseline.
+          let chat = await bridge.getChat(targetTab.tabId, incrementalSinceIndex);
           // If messages were deleted (totalMessageCount < sinceIndex), redo full extraction
-          if (chat.totalMessageCount != null && chat.totalMessageCount < baselineMessages.length) {
+          if (chat.totalMessageCount != null && chat.totalMessageCount < incrementalSinceIndex) {
             chat = await bridge.getChat(targetTab.tabId);
           }
           // Only DOM-based signals can set sawExplicitGenerating

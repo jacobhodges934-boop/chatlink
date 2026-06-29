@@ -11,7 +11,7 @@
  */
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 18;
+var EXTRACTOR_VERSION = 19;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -71,6 +71,38 @@ function isNotebookLmPage() {
   return location.hostname === "notebooklm.google.com" ||
     (location.hostname === "gemini.google.com" &&
       (location.pathname === "/notebook" || location.pathname.startsWith("/notebook/")));
+}
+
+function isChatTextCandidate(el) {
+  if (!el || !vis(el)) return false;
+  if (isRootSized(el)) return false;
+  if (el.closest && el.closest(
+    'rich-textarea, textarea, input, button, nav, header, footer, aside, ' +
+    '[role="navigation"], [role="button"], [contenteditable="true"], ' +
+    '.send-button-container, [class*="composer" i], [class*="input" i], [class*="toolbar" i]'
+  )) return false;
+  return true;
+}
+
+function uniqueTextMessagesFromCandidates(candidates, role, sinceIndex, textSelectors) {
+  const messages = [];
+  const seen = new Set();
+  const els = Array.from(candidates || []);
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!isChatTextCandidate(el)) continue;
+    var text = textSelectors ? textFromFirst(el, textSelectors) : textOf(el);
+    text = text.replace(/^(Gemini\s*(说|says)?|Google Gemini)\s*/i, "").trim();
+    if (!text) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    messages.push({ role: role, content: text });
+  }
+  return {
+    messages: messages.slice(sinceIndex || 0),
+    totalCount: messages.length,
+    tier: 2,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +497,19 @@ const EXTRACTORS = {
         }
         return { messages: messages, totalCount: allTurns.length, tier: 1 };
       }
+
+      const structural = uniqueTextMessagesFromCandidates(
+        document.querySelectorAll(
+          "response-content, model-response-text, " +
+          "[class*='response-content' i], [class*='model-response' i], " +
+          "[data-testid*='response' i], [data-testid*='assistant' i], " +
+          "[class*='markdown' i], [class*='answer' i]"
+        ),
+        "assistant",
+        sinceIndex,
+        ["model-response-text", "response-content", ".response-content-markdown", "[class*='markdown' i]"]
+      );
+      if (structural.totalCount > 0) return structural;
 
       return fallbackFullText("user");
     },
@@ -1059,7 +1104,7 @@ function detectErrorState(cfg) {
     'button[data-testid*="retry" i],button[aria-label*="retry" i],' +
     'button[aria-label*="regenerate" i],.retry-btn,.regenerate-btn'
   );
-  if (retryBtn && vis(retryBtn)) {
+  if (retryBtn && vis(retryBtn) && !(cfg && cfg.name === "grok")) {
     return {
       detected: true,
       code: "PLATFORM_ERROR",
