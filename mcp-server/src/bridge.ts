@@ -6,10 +6,10 @@ import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./typ
 import {
   ServerMessageSchema, ExtensionMessageSchema,
   AiTabsResultSchema, ChatResultSchema, PageResultSchema,
-  ArtifactsResultSchema, SendMessageResultSchema,
+  ArtifactsResultSchema, SendMessageResultSchema, DomDumpResultSchema,
   MAX_WS_FRAME_BYTES, PROTOCOL_VERSION,
   type ServerMessage, type ExtensionMessage, type AiTab,
-  type ChatContent, type PageContent, type ArtifactsContent,
+  type ChatContent, type PageContent, type ArtifactsContent, type DomDumpContent,
 } from "./protocol.js";
 
 const BRIDGE_PORT = 27182;
@@ -503,16 +503,26 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     return result.content;
   }
 
-  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed", operationId?: string): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
+  async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed", operationId?: string, startNewChat = false): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
     const opId = operationId || randomBytes(16).toString("hex");
     const result = await this.request(
-      { type: "send_message", tabId, text, platform, operationId: opId, confirmation },
+      { type: "send_message", tabId, text, platform, operationId: opId, confirmation, startNewChat },
       SendMessageResultSchema,
       "send_message_result",
       25000,
       tabId
     );
     return { success: result.success, platform: result.platform, method: result.method, confirmationSignal: result.confirmationSignal };
+  }
+
+  async domDump(tabId?: number): Promise<DomDumpContent> {
+    const result = await this.request(
+      { type: "dom_dump", tabId },
+      DomDumpResultSchema,
+      "dom_dump_result",
+      15000
+    );
+    return result.content;
   }
 
   async close(reason = "ChatLink bridge is shutting down"): Promise<void> {

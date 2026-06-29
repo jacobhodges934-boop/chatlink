@@ -20,13 +20,13 @@ const VERSION = "1.0.0";
 const MAX_LOG_ENTRIES = 200;
 
 const AI_HOSTNAMES = new Set([
-  "chat.openai.com","chatgpt.com","claude.ai","gemini.google.com",
+  "chat.openai.com","chatgpt.com","claude.ai","gemini.google.com","notebooklm.google.com",
   "grok.com","chat.deepseek.com","chat.mistral.ai","perplexity.ai","www.perplexity.ai",
 ]);
 
 const PLATFORM_NAMES = {
   "chat.openai.com":"ChatGPT","chatgpt.com":"ChatGPT","claude.ai":"Claude",
-  "gemini.google.com":"Gemini","grok.com":"Grok","chat.deepseek.com":"DeepSeek",
+  "gemini.google.com":"Gemini","notebooklm.google.com":"NotebookLM","grok.com":"Grok","chat.deepseek.com":"DeepSeek",
   "chat.mistral.ai":"Mistral","perplexity.ai":"Perplexity","www.perplexity.ai":"Perplexity",
 };
 
@@ -78,6 +78,33 @@ function parseHostname(url) {
   } catch (e) {
     return "";
   }
+}
+
+function isSupportedAiChatUrl(url) {
+  if (!url) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (e) {
+    return false;
+  }
+  if (!AI_HOSTNAMES.has(parsed.hostname)) return false;
+  return true;
+}
+
+function platformForUrl(url) {
+  if (!isSupportedAiChatUrl(url)) return "";
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (e) {
+    return "";
+  }
+  if (parsed.hostname === "notebooklm.google.com" || (parsed.hostname === "gemini.google.com" && (parsed.pathname === "/notebook" || parsed.pathname.startsWith("/notebook/")))) {
+    return "NotebookLM";
+  }
+  const host = parsed.hostname;
+  return PLATFORM_NAMES[host] ?? host;
 }
 
 async function clearDiagLog() {
@@ -272,7 +299,7 @@ function setDedupResult(operationId, result) {
 
 // ── Protocol validation guards (lightweight, no Zod) ────────────────────
 const PROTO_VERSION = 1;
-const SUPPORTED_SERVER_TYPES = new Set(["list_ai_tabs", "list_all_tabs", "get_chat", "get_page", "get_artifacts", "send_message"]);
+const SUPPORTED_SERVER_TYPES = new Set(["list_ai_tabs", "list_all_tabs", "get_chat", "get_page", "get_artifacts", "send_message", "dom_dump"]);
 const MAX_REQ_ID = 128;
 
 function validateServerMessage(msg) {
@@ -301,8 +328,12 @@ function validateServerMessage(msg) {
       console.warn("[ChatLink] Invalid confirmation value:", msg.confirmation);
       return false;
     }
+    if (msg.startNewChat !== undefined && typeof msg.startNewChat !== "boolean") {
+      console.warn("[ChatLink] Invalid startNewChat value:", msg.startNewChat);
+      return false;
+    }
   }
-  if ((msg.type === "get_chat" || msg.type === "get_page" || msg.type === "get_artifacts") && msg.tabId !== undefined) {
+  if ((msg.type === "get_chat" || msg.type === "get_page" || msg.type === "get_artifacts" || msg.type === "dom_dump") && msg.tabId !== undefined) {
     if (!Number.isInteger(msg.tabId) || msg.tabId <= 0) {
       console.warn("[ChatLink] Invalid tabId:", msg.tabId);
       return false;
@@ -322,7 +353,8 @@ function handleServerMessage(raw) {
     case "get_chat":        return handleGetContent(msg.requestId, msg.tabId, "chat", msg.sinceIndex);
     case "get_page":        return handleGetContent(msg.requestId, msg.tabId, "page");
     case "get_artifacts":   return handleGetArtifacts(msg.requestId, msg.tabId, msg.includeLinks ?? false, msg.maxLinks ?? 10);
-    case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId, msg.confirmation);
+    case "send_message":    return handleSendMessage(msg.requestId, msg.tabId, msg.text, msg.platform, msg.operationId, msg.confirmation, msg.startNewChat ?? false);
+    case "dom_dump":        return handleDomDump(msg.requestId, msg.tabId);
     default:
       console.warn("[ChatLink] Unknown message type:", msg.type);
   }
@@ -334,8 +366,7 @@ async function handleListAllTabs(requestId) {
     const tabs = allTabs
       .filter((tab) => tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://"))
       .map((tab) => {
-        const host = parseHostname(tab.url);
-        return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: PLATFORM_NAMES[host] ?? "", active: tab.active, windowId: tab.windowId };
+        return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: platformForUrl(tab.url), active: tab.active, windowId: tab.windowId };
     });
     send({ type: "all_tabs_result", requestId, tabs });
   } catch (err) { sendError(requestId, "background.list_all_tabs", err); }
@@ -345,11 +376,9 @@ async function handleListAiTabs(requestId) {
   try {
     const allTabs = await chrome.tabs.query({});
     const aiTabs = allTabs.filter((tab) => {
-      if (!tab.url) return false;
-      return AI_HOSTNAMES.has(parseHostname(tab.url));
+      return isSupportedAiChatUrl(tab.url);
     }).map((tab) => {
-      const host = new URL(tab.url).hostname;
-      return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: PLATFORM_NAMES[host] ?? host, active: tab.active, windowId: tab.windowId };
+      return { tabId: tab.id, url: tab.url, title: tab.title ?? "", platform: platformForUrl(tab.url), active: tab.active, windowId: tab.windowId };
     });
     send({ type: "ai_tabs_result", requestId, tabs: aiTabs });
   } catch (err) { sendError(requestId, "background.list_ai_tabs", err); }
@@ -363,8 +392,7 @@ async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
     } else if (mode === "chat") {
       const allTabs = await chrome.tabs.query({});
       const aiTabs = allTabs.filter((t) => {
-        if (!t.url) return false;
-        return AI_HOSTNAMES.has(parseHostname(t.url));
+        return isSupportedAiChatUrl(t.url);
       });
       if (aiTabs.length === 0) { sendError(requestId, "background.get_content.find_tab", "No AI chat tabs are open."); return; }
       tab = aiTabs.find((t) => t.active) ?? aiTabs[0];
@@ -374,6 +402,10 @@ async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
       tab = activeTab;
     }
     if (!tab?.id) { sendError(requestId, "background.get_content.find_tab", "Tab not found."); return; }
+    if (mode === "chat" && !isSupportedAiChatUrl(tab.url)) {
+      sendError(requestId, "background.get_content.find_tab", "Target tab is not a supported AI chat page. Use get_page_content for non-chat pages.");
+      return;
+    }
 
     let result;
     if (mode === "chat") {
@@ -389,7 +421,7 @@ async function handleGetContent(requestId, targetTabId, mode, sinceIndex) {
     if (result.error) { sendError(requestId, "background.get_content.content_script", result.error); return; }
 
     const host = parseHostname(tab.url);
-    const platform = PLATFORM_NAMES[host] ?? host ?? "Unknown";
+    const platform = platformForUrl(tab.url) || PLATFORM_NAMES[host] || host || "Unknown";
 
     if (result.type === "page") {
       send({ type: "page_result", requestId, content: { tabId: tab.id, platform, url: result.url, title: result.title, text: result.text, extractedAt: result.extractedAt } });
@@ -427,6 +459,22 @@ async function handleGetArtifacts(requestId, targetTabId, includeLinks, maxLinks
   } catch (err) { sendError(requestId, "background.get_artifacts", err); }
 }
 
+async function handleDomDump(requestId, targetTabId) {
+  try {
+    let tab;
+    if (targetTabId) { tab = await chrome.tabs.get(targetTabId); }
+    else {
+      const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      tab = activeTab;
+    }
+    if (!tab?.id) { sendError(requestId, "background.dom_dump", "Tab not found."); return; }
+    await ensureContentScript(tab.id);
+    const result = await chrome.tabs.sendMessage(tab.id, { type: "__CHATLINK_DOM_DUMP__" }).catch(() => null);
+    if (!result) { sendError(requestId, "background.dom_dump", "No response from content script."); return; }
+    send({ type: "dom_dump_result", requestId, content: { tabId: tab.id, url: tab.url ?? "", title: tab.title ?? "", ...result } });
+  } catch (err) { sendError(requestId, "background.dom_dump", err); }
+}
+
 const injectionPromises = new Map();
 
 async function ensureContentScript(tabId) {
@@ -457,7 +505,7 @@ async function ensureContentScript(tabId) {
   return promise;
 }
 
-async function handleSendMessage(requestId, targetTabId, text, platform, operationId, confirmation) {
+async function handleSendMessage(requestId, targetTabId, text, platform, operationId, confirmation, startNewChat) {
   try {
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       sendError(requestId, "background.send_message.validate", "No text provided to send.");
@@ -473,12 +521,12 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     let tab;
     if (targetTabId) {
       tab = await chrome.tabs.get(targetTabId);
-      if (!tab?.url || !AI_HOSTNAMES.has(new URL(tab.url).hostname)) {
+      if (!tab?.url || !isSupportedAiChatUrl(tab.url)) {
         sendError(requestId, "background.send_message.find_tab", "Target tab is not an AI chat page."); return;
       }
     } else {
       const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      tab = tabs.find(t => AI_HOSTNAMES.has(parseHostname(t.url)));
+      tab = tabs.find(t => isSupportedAiChatUrl(t.url));
       if (!tab) {
         sendError(requestId, "background.send_message.find_tab", "No active AI chat tab. Open ChatGPT/Gemini/Claude first."); return;
       }
@@ -486,7 +534,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     if (!tab?.id) { sendError(requestId, "background.send_message.find_tab", "Tab not found."); return; }
 
     if (!platform) {
-      platform = PLATFORM_NAMES[parseHostname(tab.url)]?.toLowerCase();
+      platform = platformForUrl(tab.url).toLowerCase();
     }
 
     // Serial queue per tab — no auto-focus (just send via content script)
@@ -498,6 +546,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
           text: text.trim(),
           platform,
           confirmation: confirmation ?? "confirmed",
+          startNewChat: !!startNewChat,
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -517,7 +566,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
       return;
     }
 
-    const tabPlatform = PLATFORM_NAMES[parseHostname(tab.url)]?.toLowerCase();
+    const tabPlatform = platformForUrl(tab.url).toLowerCase();
     const r = {
       success: !!(result.ok || result.success),
       sent: !!(result.sent ?? result.ok ?? result.success),

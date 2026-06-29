@@ -2,9 +2,9 @@
 
 **Your browser already has the models. ChatLink gives Claude Code the wire.**
 
-Turn ChatGPT, Claude, Gemini, DeepSeek, Grok, Mistral, and Perplexity tabs into tools that Claude Code can read, write to, and delegate work through.
+Turn ChatGPT, Claude, Gemini, NotebookLM, DeepSeek, Grok, Mistral, and Perplexity tabs into tools that Claude Code can read, write to, and delegate work through.
 
-One local bridge. Seven AI platforms. No separate model API key required.
+One local bridge. Browser AI platforms. No separate model API key required.
 
 ChatLink uses the AI sessions already open in your browser. Your existing web subscription and usage limits still apply, but ChatLink does not add separate per-token model API billing.
 
@@ -30,6 +30,7 @@ You
          ├─ ChatGPT
          ├─ Claude
          ├─ Gemini
+         ├─ NotebookLM
          ├─ DeepSeek
          ├─ Grok
          ├─ Mistral
@@ -43,6 +44,7 @@ You
 | ChatGPT | ✓ | ✓ | ✓ |
 | Claude | ✓ | ✓ | ✓ |
 | Gemini | ✓ | ✓ | ✓ |
+| NotebookLM | ✓ | ✓ | ✓ |
 | DeepSeek | ✓ | ✓ | ✓ |
 | Grok | ✓ | ✓ | ✓ |
 | Mistral | ✓ | ✓ | ✓ |
@@ -84,7 +86,8 @@ Claude also supports artifact and research-panel extraction.
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │ Browser AI tabs                                             │
-│ ChatGPT · Claude · Gemini · DeepSeek · Grok · Mistral · PPLX│
+│ ChatGPT · Claude · Gemini · NotebookLM · DeepSeek · Grok    │
+│ Mistral · PPLX                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,7 +137,7 @@ After the initial conversation snapshot, polling requests only newly added messa
 - Node.js 18 or newer
 - Google Chrome 116 or newer
 - Claude Code or another MCP-compatible client
-- At least one supported AI website open and signed in
+- At least one supported AI website open and signed in. The tab can be an existing conversation, or the start page shown after clicking New chat / Start new conversation.
 
 ### 1. Clone and build
 
@@ -151,7 +154,7 @@ npm run build
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
 4. Select the repository's `chrome-extension/` directory.
-5. Open a supported AI website.
+5. Open a supported AI website. You may open an old conversation or click the site's New chat / Start new conversation entry and leave it on the blank composer page.
 6. Confirm that the ChatLink extension badge displays **ON**.
 
 > When extension code changes, reload ChatLink from `chrome://extensions` and refresh any open AI tabs.
@@ -176,7 +179,7 @@ Restart Claude Code after registering the server.
 
 ### 4. Verify the connection
 
-Open ChatGPT, Claude, Gemini, or another supported platform, then ask Claude Code:
+Open ChatGPT, Claude, Gemini, NotebookLM, or another supported platform, then ask Claude Code:
 
 > Use ChatLink to check the extension status and list my open AI tabs.
 
@@ -195,6 +198,7 @@ You can also ask it directly:
 | `list_tabs` | Lists all readable browser tabs |
 | `get_page_content` | Extracts readable content from a browser tab |
 | `get_claude_artifacts` | Extracts Claude artifacts, code, documents, research steps, and optional source links |
+| `dom_dump` | Dumps visible inputs, send buttons, new-chat buttons, message containers, body candidates, and busy/stop/complete signals for adapter debugging |
 | `extension_status` | Checks whether the Chrome extension is connected |
 
 ### `delegate_coding_task`
@@ -223,11 +227,36 @@ return only the new assistant response
 
 | Argument | Description |
 |---|---|
-| `platform` | `chatgpt`, `claude`, `gemini`, `deepseek`, `grok`, `mistral`, or `perplexity` |
+| `platform` | `chatgpt`, `claude`, `gemini`, `notebooklm`, `deepseek`, `grok`, `mistral`, or `perplexity` |
 | `task` | The task to send |
 | `tabId` | Optional exact browser tab |
 | `context` | Optional source files, logs, diffs, or other context |
 | `timeout` | Completion timeout from 5 to 900 seconds; default is 180 |
+| `startNewChat` | Optional boolean. Default `false` sends in the current old conversation or already-open new-chat start page. Set `true` to click the platform's new-chat control before sending. |
+
+### New chat pages
+
+Each supported AI has two valid starting points:
+
+- an already opened old conversation, where ChatLink appends the message to that thread
+- a new-chat start page, where the first sent message turns the blank composer into a normal conversation
+
+Use `startNewChat: false` when you have already opened the target old conversation or new-chat start page yourself. Use `startNewChat: true` when you want ChatLink to click the platform's New chat / Start new conversation control first and then send the message.
+
+### `send_chat_message`
+
+`send_chat_message` accepts the same `startNewChat` option:
+
+```json
+{
+  "text": "Say hello in Chinese, nothing else",
+  "startNewChat": true
+}
+```
+
+### `dom_dump`
+
+Use `dom_dump` when a platform UI changes or a new adapter needs selectors. It reports bounded previews for visible input boxes, send buttons, new-chat controls, stop/busy/complete signals, message containers, and likely response-body elements. Text previews are intentionally truncated.
 
 ## HTTP MCP mode
 

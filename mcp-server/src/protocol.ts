@@ -79,6 +79,28 @@ export const ArtifactsContentSchema = z.object({
   note: z.string().nullable().optional(),
 });
 
+export const DomDumpElementSchema = z.object({
+  kind: z.string().max(64),
+  tag: z.string().max(64),
+  selector: z.string().max(512).optional(),
+  visible: z.boolean().optional(),
+  disabled: z.boolean().optional(),
+  text: z.string().max(240).optional(),
+  attrs: z.record(z.string().max(512)).optional(),
+});
+
+export const DomDumpContentSchema = z.object({
+  tabId: z.number().int().positive(),
+  platform: z.string().max(128).optional(),
+  url: z.string().max(8192),
+  title: z.string().max(1024),
+  cfgName: z.string().max(128).optional().nullable(),
+  total: z.number().int().nonnegative(),
+  shown: z.number().int().nonnegative(),
+  elements: z.array(DomDumpElementSchema).max(200),
+  samples: z.array(z.object({}).passthrough()).optional(),
+});
+
 // ── Envelope schemas (discriminated unions, strict) ──────────────────────────
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("list_ai_tabs"), requestId: RequestIdSchema }).strict(),
@@ -86,7 +108,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("get_chat"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), sinceIndex: z.number().int().nonnegative().optional() }).strict(),
   z.object({ type: z.literal("get_page"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional() }).strict(),
   z.object({ type: z.literal("get_artifacts"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), includeLinks: z.boolean().optional(), maxLinks: z.number().int().positive().max(100).optional() }).strict(),
-  z.object({ type: z.literal("send_message"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), text: z.string().min(1).max(MAX_SEND_TEXT_LENGTH), platform: z.string().max(128).optional(), operationId: z.string().max(128).optional(), confirmation: z.enum(["dispatch", "confirmed"]).optional() }).strict(),
+  z.object({ type: z.literal("send_message"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional(), text: z.string().min(1).max(MAX_SEND_TEXT_LENGTH), platform: z.string().max(128).optional(), operationId: z.string().max(128).optional(), confirmation: z.enum(["dispatch", "confirmed"]).optional(), startNewChat: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal("dom_dump"), requestId: RequestIdSchema, tabId: z.number().int().positive().optional() }).strict(),
 ]);
 
 export const ExtensionMessageSchema = z.discriminatedUnion("type", [
@@ -101,6 +124,7 @@ export const ExtensionMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), requestId: RequestIdSchema, message: z.string().max(MAX_ERROR_MESSAGE_LENGTH), code: z.string().max(64).optional(), stage: z.string().max(128).optional(), retryable: z.boolean().optional(), details: z.unknown().optional() }).strict(),
   z.object({ type: z.literal("tab_closed"), tabId: z.number().int().positive() }).strict(),
   z.object({ type: z.literal("tab_navigated"), tabId: z.number().int().positive(), url: z.string().max(8192).optional() }).strict(),
+  z.object({ type: z.literal("dom_dump_result"), requestId: RequestIdSchema, content: DomDumpContentSchema }).strict(),
 ]);
 
 // ── Response shape schemas (passthrough for flexible matching) ────────────────
@@ -109,6 +133,7 @@ export const ChatResultSchema = z.object({ content: ChatContentSchema }).passthr
 export const PageResultSchema = z.object({ content: PageContentSchema }).passthrough();
 export const ArtifactsResultSchema = z.object({ content: ArtifactsContentSchema }).passthrough();
 export const SendMessageResultSchema = z.object({ success: z.boolean(), platform: z.string().optional(), method: z.string().optional(), confirmationSignal: z.string().optional() }).passthrough();
+export const DomDumpResultSchema = z.object({ content: DomDumpContentSchema }).passthrough();
 
 // ── Inferred types ────────────────────────────────────────────────────────────
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
@@ -119,3 +144,4 @@ export type ChatContent = z.infer<typeof ChatContentSchema>;
 export type PageContent = z.infer<typeof PageContentSchema>;
 export type ArtifactsContent = z.infer<typeof ArtifactsContentSchema>;
 export type ClaudeArtifact = z.infer<typeof ClaudeArtifactSchema>;
+export type DomDumpContent = z.infer<typeof DomDumpContentSchema>;

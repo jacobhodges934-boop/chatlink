@@ -514,10 +514,32 @@ function registerTools(server: McpServer) {
     }
   );
 
+  // ── dom_dump ────────────────────────────────────────────────────
+  server.tool(
+    "dom_dump",
+    "Dump DOM structure of an AI chat page — returns tags, classes, data-testid, and text previews for message-like elements. Diagnostic tool for debugging platform adapters.",
+    {
+      tabId: z.number().optional().describe("Specific browser tab ID. Omit to use the active tab."),
+    },
+    async ({ tabId }) => {
+      if (!bridge.isConnected()) {
+        return notConnectedError("dom_dump.preflight");
+      }
+      try {
+        const result = await bridge.domDump(tabId);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return toolError(err, "dom_dump");
+      }
+    }
+  );
+
   // ── send_chat_message ────────────────────────────────────────────────────
   server.tool(
     "send_chat_message",
-    "Send a message into an AI chat input box and optionally click submit. Supports ChatGPT, Claude, Gemini, Grok, DeepSeek, Mistral, Perplexity. If no tabId is provided it auto-selects the most recently active AI chat tab.",
+    "Send a message into an AI chat input box and optionally click submit. Supports ChatGPT, Claude, Gemini, NotebookLM, Grok, DeepSeek, Mistral, Perplexity. If no tabId is provided it auto-selects the most recently active AI chat tab.",
     {
       text: z
         .string()
@@ -536,14 +558,19 @@ function registerTools(server: McpServer) {
         .describe(
           "dispatch: return immediately after triggering send. confirmed: wait for page to confirm submission (default)."
         ),
+      startNewChat: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("If true, click the platform's new-chat control before sending. Default false sends in the current old or already-open new chat."),
     },
-    async ({ text, tabId, confirmation }) => {
+    async ({ text, tabId, confirmation, startNewChat }) => {
       if (!bridge.isConnected()) {
         return notConnectedError("send_chat_message.preflight");
       }
 
       try {
-        const result = await bridge.sendChatMessage(text, tabId, undefined, confirmation);
+        const result = await bridge.sendChatMessage(text, tabId, undefined, confirmation, undefined, startNewChat);
 
         if (result.success) {
           return {
@@ -571,13 +598,14 @@ function registerTools(server: McpServer) {
     "delegate_coding_task",
     "Send a coding task to an AI chat, wait for complete response, return only the new assistant reply. Combines find-tab + send + poll + read into one call.",
     {
-      platform: z.enum(["chatgpt","gemini","claude","deepseek","grok","mistral","perplexity"]).describe("AI platform to target"),
+      platform: z.enum(["chatgpt","gemini","notebooklm","claude","deepseek","grok","mistral","perplexity"]).describe("AI platform to target"),
       task: z.string().min(1).describe("The coding task. Be specific about files and expected output."),
       tabId: z.number().optional().describe("Specific tab ID. Omit to auto-select by platform."),
       context: z.string().optional().describe("Optional context: file contents, error logs, git diff."),
       timeout: z.number().int().min(5).max(900).optional().default(180).describe("Max seconds to wait for response (5-900)."),
+      startNewChat: z.boolean().optional().default(false).describe("If true, click the platform's new-chat control before sending. Default false sends in the current old or already-open new chat."),
     },
-    async ({ platform, task, tabId, context, timeout }) => {
+    async ({ platform, task, tabId, context, timeout, startNewChat }) => {
       if (!bridge.isConnected()) {
         return notConnectedError("delegate_coding_task.preflight");
       }
@@ -725,7 +753,7 @@ function registerTools(server: McpServer) {
         const delegateOpId = randomUUID();
         let sent;
         try {
-          sent = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "confirmed", delegateOpId);
+          sent = await bridge.sendChatMessage(prompt, targetTab.tabId, platform, "confirmed", delegateOpId, startNewChat);
         } catch(e) {
           return toolError(e, "delegate_coding_task.send");
         }

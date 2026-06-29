@@ -1,7 +1,7 @@
 {
   "name": "chatlink-server",
   "version": "0.5.0",
-  "description": "Bridge Claude Code to seven browser AI chats through a local, authenticated MCP server. No API keys required — uses your existing web sessions.",
+  "description": "Bridge Claude Code to browser AI chats through a local, authenticated MCP server. No API keys required — uses your existing web sessions.",
   "type": "module",
   "main": "dist/index.js",
   "author": "",

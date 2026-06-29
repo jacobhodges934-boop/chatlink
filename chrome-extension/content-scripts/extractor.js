@@ -11,7 +11,7 @@
  */
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 16;
+var EXTRACTOR_VERSION = 18;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -25,7 +25,8 @@ function textOf(el) {
 
   // Remove hidden elements, buttons, tooltips
   for (const hidden of clone.querySelectorAll(
-    '[aria-hidden="true"], button, [role="tooltip"], noscript, style, script'
+    '[aria-hidden="true"], .cdk-visually-hidden, .sr-only, button, [role="tooltip"], noscript, style, script, ' +
+    '[class*="generated-image-controls" i], [class*="image-controls" i], [class*="edit-image" i]'
   )) {
     hidden.remove();
   }
@@ -52,6 +53,26 @@ function firstNonEmpty(...selectors) {
   return [];
 }
 
+function textFromFirst(el, selectors) {
+  if (!el) return "";
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      var targets = el.querySelectorAll(selectors[i]);
+      for (var j = 0; j < targets.length; j++) {
+        var text = textOf(targets[j]);
+        if (text) return text;
+      }
+    } catch (e) {}
+  }
+  return textOf(el);
+}
+
+function isNotebookLmPage() {
+  return location.hostname === "notebooklm.google.com" ||
+    (location.hostname === "gemini.google.com" &&
+      (location.pathname === "/notebook" || location.pathname.startsWith("/notebook/")));
+}
+
 // ---------------------------------------------------------------------------
 // Per-platform chat extractors
 // ---------------------------------------------------------------------------
@@ -63,6 +84,13 @@ const EXTRACTORS = {
   chatgpt: {
     input: ['#prompt-textarea','textarea[data-id]','div[contenteditable="true"][data-lexical-editor]'],
     send: ['button[data-testid="send-button"]','button[aria-label="Send"]'],
+    newChat: [
+      'a[href="/"]',
+      'a[href*="/?"]',
+      'a[aria-label*="new chat" i]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+    ],
     stop: [
       'button[data-testid="stop-button"]',
       'button[data-testid*="stop" i]',
@@ -170,6 +198,13 @@ const EXTRACTORS = {
   claude: {
     input: ['div.ProseMirror[contenteditable="true"]','div[contenteditable="true"][data-placeholder]'],
     send: ['button[aria-label*="Send Message" i]','button[aria-label*="Send" i]'],
+    newChat: [
+      'a[href="/new"]',
+      'a[href*="/new"]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+      '[data-testid*="new-chat" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[title*="stop" i]',
@@ -182,6 +217,11 @@ const EXTRACTORS = {
       '[data-testid*="loading" i]',
       '[aria-busy="true"]',
       '[role="status"]',
+    ],
+    complete: [
+      '[data-testid="ai-turn"]',
+      '[class*="AssistantTurn"]',
+      '[data-is-streaming="false"]',
     ],
     errorRules: [
       {
@@ -243,11 +283,109 @@ const EXTRACTORS = {
     },
   },
 
+  // ── NotebookLM (notebooklm.google.com or gemini.google.com/notebook) ──────
+  notebooklm: {
+    input: [
+      'rich-textarea div[contenteditable="true"]',
+      'div[contenteditable="true"][role="textbox"]',
+      'textarea[placeholder*="Ask" i]',
+      'textarea',
+    ],
+    send: [
+      'button[aria-label*="send" i]',
+      'button[aria-label*="提交" i]',
+      'button[type="submit"]',
+      '.send-button-container button',
+    ],
+    newChat: [
+      'button[aria-label*="new chat" i]',
+      'button[aria-label*="new notebook" i]',
+      'a[href*="/notebook"]',
+      '[role="button"][aria-label*="new" i]',
+      '[role="button"][aria-label*="新" i]',
+    ],
+    stop: [
+      'button[aria-label*="stop" i]',
+      'button[aria-label*="cancel" i]',
+      'button[data-testid*="stop" i]',
+      '[role="button"][aria-label*="stop" i]',
+    ],
+    busy: [
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+      '[class*="loading" i]',
+      '[class*="generating" i]',
+      '[class*="thinking" i]',
+    ],
+    complete: [
+      'response-content',
+      'model-response-text',
+      '.response-content-markdown',
+      '[data-testid*="assistant-message" i]',
+    ],
+    errorRules: [
+      {
+        id: "notebooklm_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /服务.*不可用/i, /网络.*错误/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
+    ],
+    detect: () => isNotebookLmPage(),
+
+    extract(sinceIndex) {
+      sinceIndex = sinceIndex || 0;
+      const messages = [];
+      const userEls = document.querySelectorAll(
+        "user-query, .user-query, [data-testid*='user-message' i], [data-message-author-role='user']"
+      );
+      const assistantEls = document.querySelectorAll(
+        "model-response-text, response-content, model-response, .response-content-markdown, " +
+        "[data-testid*='assistant-message' i], [data-message-author-role='assistant']"
+      );
+      if (userEls.length > 0 || assistantEls.length > 0) {
+        const allTurns = [
+          ...Array.from(userEls).map((el) => ({ el, role: "user" })),
+          ...Array.from(assistantEls).map((el) => ({ el, role: "assistant" })),
+        ].sort((a, b) => {
+          const pos = a.el.compareDocumentPosition(b.el);
+          return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+        });
+        for (var i = sinceIndex; i < allTurns.length; i++) {
+          var turn = allTurns[i];
+          const text = turn.role === "assistant"
+            ? textFromFirst(turn.el, ["model-response-text", "response-content", ".response-content-markdown", "[class*='markdown' i]"])
+            : textOf(turn.el);
+          if (text) messages.push({ role: turn.role, content: text });
+        }
+        return { messages: messages, totalCount: allTurns.length, tier: 1 };
+      }
+      return fallbackFullText("user");
+    },
+  },
+
   // ── Gemini ────────────────────────────────────────────────────────────────
   // Gemini uses Angular custom elements: <user-query> and <model-response>
   gemini: {
     input: ['rich-textarea div[contenteditable="true"]','div[contenteditable="true"][role="textbox"]'],
     send: ['button[aria-label*="send message" i]','.send-button-container button'],
+    newChat: [
+      'a[href="/app"]',
+      'a[href*="/app"]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+      '[role="button"][aria-label*="发起新对话" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[aria-label*="cancel" i]',
@@ -262,6 +400,12 @@ const EXTRACTORS = {
       '[role="progressbar"]',
       '[class*="loading" i]',
       '[class*="generating" i]',
+    ],
+    complete: [
+      'response-content',
+      'model-response-text',
+      'model-response',
+      '.response-content-markdown',
     ],
     errorRules: [
       {
@@ -282,7 +426,7 @@ const EXTRACTORS = {
         source: "platform_rule",
       },
     ],
-    detect: () => location.hostname === "gemini.google.com",
+    detect: () => location.hostname === "gemini.google.com" && !isNotebookLmPage(),
 
     extract(sinceIndex) {
       sinceIndex = sinceIndex || 0;
@@ -304,7 +448,9 @@ const EXTRACTORS = {
         });
         for (var i = sinceIndex; i < allTurns.length; i++) {
           var turn = allTurns[i];
-          const text = textOf(turn.el);
+          const text = turn.role === "assistant"
+            ? textFromFirst(turn.el, ["model-response-text", "response-content", ".response-content-markdown", "[class*='markdown' i]"])
+            : textOf(turn.el);
           if (text) messages.push({ role: turn.role, content: text });
         }
         return { messages: messages, totalCount: allTurns.length, tier: 1 };
@@ -318,6 +464,13 @@ const EXTRACTORS = {
   grok: {
     input: ['textarea[placeholder*="Ask"]','div[contenteditable="true"][role="textbox"]'],
     send: ['button[aria-label*="send" i]'],
+    newChat: [
+      'a[href="/"]',
+      'a[href*="/?"]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+      '[role="button"][aria-label*="新建聊天" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[aria-label*="cancel" i]',
@@ -330,8 +483,11 @@ const EXTRACTORS = {
       '[data-testid*="thinking" i]',
       '[data-testid*="loading" i]',
       '[class*="streaming" i]',
-      '[class*="thinking" i]',
-      '[class*="loading" i]',
+    ],
+    complete: [
+      '[data-testid="assistant-message"] .response-content-markdown',
+      '[data-testid="assistant-message"]',
+      '[class*="response-content" i]',
     ],
     errorRules: [
       {
@@ -368,7 +524,9 @@ const EXTRACTORS = {
           var el = testidMessages[i];
           const id = el.getAttribute("data-testid") ?? "";
           const isUser = id.includes("user") || id.includes("human");
-          const text = textOf(el);
+          const text = isUser
+            ? textOf(el)
+            : textFromFirst(el, [".response-content-markdown", "[class*='response-content' i]", "[class*='markdown' i]"]);
           if (text) messages.push({ role: isUser ? "user" : "assistant", content: text });
         }
         return { messages: messages, totalCount: testidMessages.length, tier: 1 };
@@ -408,6 +566,13 @@ const EXTRACTORS = {
   deepseek: {
     input: ['textarea#chat-input','textarea[placeholder*="发"]'],
     send: ['div[role="button"][aria-label*="发" i]','button[type="submit"]'],
+    newChat: [
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+      '[role="button"][aria-label*="开启新对话" i]',
+      '[role="button"][aria-label*="新对话" i]',
+      'button[aria-label*="新对话" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[aria-label*="停止" i]',
@@ -423,6 +588,12 @@ const EXTRACTORS = {
       '[class*="thinking" i]',
       '[aria-busy="true"]',
       '[role="progressbar"]',
+    ],
+    complete: [
+      '.ds-markdown',
+      "[class*='assistant-message']",
+      "[class*='AssistantMessage']",
+      "[class*='botMessage']",
     ],
     errorRules: [
       {
@@ -506,6 +677,13 @@ const EXTRACTORS = {
       'button[type="submit"]',
       '[role="button"][aria-label*="send" i]',
     ],
+    newChat: [
+      'a[href="/chat"]',
+      'a[href*="/chat"]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new chat" i]',
+      '[data-testid*="new-chat" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[aria-label*="cancel" i]',
@@ -520,6 +698,12 @@ const EXTRACTORS = {
       '[class*="loading" i]',
       '[class*="generating" i]',
       '[aria-busy="true"]',
+    ],
+    complete: [
+      '[data-role="assistant"]',
+      '[data-message-role="assistant"]',
+      "[class*='AssistantMessage']",
+      "[class*='assistant-message']",
     ],
     errorRules: [
       {
@@ -601,6 +785,13 @@ const EXTRACTORS = {
       'button[aria-label*="send" i]',
       'button[type="submit"]',
     ],
+    newChat: [
+      'a[href="/"]',
+      'a[href*="/?"]',
+      'button[aria-label*="new thread" i]',
+      'button[aria-label*="new chat" i]',
+      '[role="button"][aria-label*="new" i]',
+    ],
     stop: [
       'button[aria-label*="stop" i]',
       'button[aria-label*="cancel" i]',
@@ -616,6 +807,12 @@ const EXTRACTORS = {
       '[class*="loading" i]',
       '[aria-busy="true"]',
       '[role="progressbar"]',
+    ],
+    complete: [
+      "[class*='AnswerSection']",
+      "[class*='answer-section']",
+      "[data-testid='answer']",
+      "[class*='markdown-content']",
     ],
     errorRules: [
       {
@@ -1505,6 +1702,17 @@ function isDisabledControl(el) {
   );
 }
 
+function isEnabledButtonLike(el) {
+  if (!el) return false;
+  var role = "";
+  try { role = el.getAttribute("role") || ""; } catch (e) {}
+  var tag = el.tagName || "";
+  return (
+    (tag === "BUTTON" || role === "button") &&
+    !isDisabledControl(el)
+  );
+}
+
 function collectSignalText(el) {
   if (!el) return "";
   var attrs = [
@@ -1526,7 +1734,7 @@ function collectSignalText(el) {
   }
   var role = "";
   try { role = el.getAttribute("role") || ""; } catch (e) {}
-  if (role === "button" || el.tagName === "BUTTON" || role === "status") {
+  if (role === "button" || el.tagName === "BUTTON" || el.tagName === "A" || role === "status") {
     parts.push((el.textContent || "").slice(0, 120));
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1585,6 +1793,7 @@ function isActiveBusyElement(el) {
   if (role === "progressbar") return true;
   if (el.getAttribute && el.getAttribute("aria-busy") === "true") return true;
   if (target.getAttribute && target.getAttribute("aria-busy") === "true") return true;
+  if (isEnabledButtonLike(target)) return false;
   if (/\b(spinner|loading|streaming|generating|responding|thinking|progress|animate-spin|typing)\b|生成|思考|加载|正在|回答中/.test(text)) return true;
   return false;
 }
@@ -1708,6 +1917,62 @@ function findSend(input) {
   return null;
 }
 
+const DEFAULT_NEW_CHAT_SEL = [
+  'a[aria-label*="new chat" i]',
+  'button[aria-label*="new chat" i]',
+  '[role="button"][aria-label*="new chat" i]',
+  '[data-testid*="new-chat" i]',
+  '[data-testid*="new_conversation" i]',
+  '[aria-label*="新聊天" i]',
+  '[aria-label*="新对话" i]',
+  '[aria-label*="发起新对话" i]',
+  '[aria-label*="开启新对话" i]',
+];
+
+function isNewChatElement(el) {
+  var target = controlFor(el);
+  if (!target || !vis(target) || isDisabledControl(target)) return false;
+  var text = (collectSignalText(target) + " " + collectSignalText(el)).toLowerCase();
+  if (/new\s+(chat|conversation|thread|notebook)|start\s+new|compose|新聊天|新对话|发起新对话|开启新对话|新建聊天|新建笔记本/.test(text)) return true;
+  return false;
+}
+
+function findNewChat() {
+  var cfg=getCfg();
+  if(!cfg) return null;
+  var selectors = selectorList(cfg.newChat, DEFAULT_NEW_CHAT_SEL);
+  var els = queryAllSafe(selectors);
+  for (var i = 0; i < els.length; i++) {
+    var target = controlFor(els[i]);
+    if (isNewChatElement(target)) return target;
+  }
+  return null;
+}
+
+async function waitInputReady(maxFrames) {
+  maxFrames = maxFrames || 30;
+  for (var i = 0; i < maxFrames; i++) {
+    await waitTick();
+    var input = findInput();
+    if (input) return input;
+  }
+  return findInput();
+}
+
+async function startNewChatIfRequested(startNewChat) {
+  if (!startNewChat) return null;
+  var btn = findNewChat();
+  if (!btn) {
+    var existingInput = findInput();
+    if (existingInput) return existingInput;
+    throw new Error("找不到新聊天按钮: " + location.href);
+  }
+  btn.click();
+  var input = await waitInputReady(40);
+  if (!input) throw new Error("新聊天页面没有出现输入框: " + location.href);
+  return input;
+}
+
 // ── Performance-optimized send message ──────────────────────────────────
 const SEND_CONFIRMATION_MODES = new Set(["dispatch","confirmed"]);
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 1800;
@@ -1805,12 +2070,14 @@ function waitSubmission(opts){
   });
 }
 
-async function sendMessage(text,confirmation){
+async function sendMessage(text,confirmation,options){
   confirmation=confirmation||"confirmed";
+  options=options||{};
   var started=performance.now();
   if(!text||!text.trim())throw new Error("消息不能为空");
   if(!SEND_CONFIRMATION_MODES.has(confirmation))throw new Error("无效confirmation: "+confirmation);
-  var input=findInput();
+  var newInput=await startNewChatIfRequested(!!options.startNewChat);
+  var input=newInput||findInput();
   if(!input)throw new Error("找不到输入框: "+location.href);
   var btn=await fillInput(input,text);
   var method,sendAction;
@@ -1822,18 +2089,117 @@ async function sendMessage(text,confirmation){
   }
   var cfg=getCfg?getCfg():{};
   primeAssistantTurnProbe();
-  if(confirmation==="dispatch"){await Promise.resolve().then(sendAction);return{ok:true,sent:true,confirmed:false,confirmation:"dispatch",confirmationSignal:"dispatched",platform:cfg.name||"unknown",site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};}
+  if(confirmation==="dispatch"){await Promise.resolve().then(sendAction);return{ok:true,sent:true,confirmed:false,confirmation:"dispatch",confirmationSignal:"dispatched",platform:cfg.name||"unknown",site:cfg.name||"unknown",method:(options.startNewChat?"new_chat+":"")+method,url:location.href,durationMs:Math.round(performance.now()-started)};}
   var r=await waitSubmission({input:input,text:text,sendAction:sendAction});
   if(!r.confirmed)throw new Error("提交确认超时"+DEFAULT_CONFIRMATION_TIMEOUT_MS+"ms");
-  return{ok:true,sent:true,confirmed:true,confirmation:"confirmed",confirmationSignal:r.signal,platform:cfg.name||"unknown",site:cfg.name||"unknown",method:method,url:location.href,durationMs:Math.round(performance.now()-started)};
+  return{ok:true,sent:true,confirmed:true,confirmation:"confirmed",confirmationSignal:r.signal,platform:cfg.name||"unknown",site:cfg.name||"unknown",method:(options.startNewChat?"new_chat+":"")+method,url:location.href,durationMs:Math.round(performance.now()-started)};
 }
 
-// Listen for messages from background.js
+function cssPath(el) {
+  if (!el || !el.tagName) return "";
+  var parts = [];
+  var cur = el;
+  while (cur && cur.nodeType === Node.ELEMENT_NODE && cur !== document.body && parts.length < 5) {
+    var part = cur.tagName.toLowerCase();
+    var id = cur.getAttribute("id");
+    if (id) {
+      part += "#" + id.slice(0, 40);
+      parts.unshift(part);
+      break;
+    }
+    var testid = cur.getAttribute("data-testid");
+    if (testid) part += '[data-testid="' + testid.slice(0, 80) + '"]';
+    else {
+      var cls = String(cur.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
+      if (cls.length) part += "." + cls.join(".");
+    }
+    parts.unshift(part);
+    cur = cur.parentElement;
+  }
+  return parts.join(" > ");
+}
+
+function dumpElement(kind, el, matchedSelector) {
+  var target = controlFor(el) || el;
+  var attrs = {};
+  var names = ["id", "class", "data-testid", "data-message-author-role", "data-role", "data-message-role", "aria-label", "role", "title", "href", "placeholder"];
+  for (var i = 0; i < names.length; i++) {
+    try {
+      var value = target.getAttribute && target.getAttribute(names[i]);
+      if (value) attrs[names[i]] = String(value).slice(0, 240);
+    } catch (e) {}
+  }
+  var text = (target.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  return {
+    kind: kind,
+    tag: (target.tagName || "").toLowerCase(),
+    selector: matchedSelector || cssPath(target),
+    visible: vis(target),
+    disabled: isDisabledControl(target),
+    text: text || undefined,
+    attrs: attrs,
+  };
+}
+
+function collectDumpGroup(out, seen, kind, selectors, limit) {
+  var count = 0;
+  selectors = selectors || [];
+  for (var i = 0; i < selectors.length; i++) {
+    var selector = selectors[i];
+    var els = queryAllSafe([selector]);
+    for (var j = 0; j < els.length; j++) {
+      var item = dumpElement(kind, els[j], selector);
+      var sig = kind + "|" + item.selector + "|" + JSON.stringify(item.attrs || {});
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      out.push(item);
+      count++;
+      if (count >= limit) return;
+    }
+  }
+}
+
+// DOM diagnostic: dump key chat-related elements with tags, classes, testids
+function domDump() {
+  var elements = [];
+  var seen = new Set();
+  var cfg = getCfg ? getCfg() : null;
+  collectDumpGroup(elements, seen, "input", cfg ? cfg.input : [], 12);
+  collectDumpGroup(elements, seen, "send", cfg ? cfg.send : [], 12);
+  collectDumpGroup(elements, seen, "newChat", selectorList(cfg && cfg.newChat, DEFAULT_NEW_CHAT_SEL), 12);
+  collectDumpGroup(elements, seen, "stop", selectorList(cfg && cfg.stop, DEFAULT_STOP_SEL), 12);
+  collectDumpGroup(elements, seen, "busy", selectorList(cfg && cfg.busy, DEFAULT_BUSY_SEL), 12);
+  collectDumpGroup(elements, seen, "complete", cfg ? cfg.complete : [], 12);
+  collectDumpGroup(elements, seen, "message", [
+    "article",
+    "[data-testid*='message' i]",
+    "[data-testid*='turn' i]",
+    "[data-message-author-role]",
+    "user-query",
+    "model-response",
+    "model-response-text",
+    "response-content",
+    ".response-content-markdown",
+    "[class*='message' i]",
+    "[class*='response' i]",
+    "[class*='prose' i]",
+  ], 80);
+  return {
+    platform: cfg ? cfg.name : undefined,
+    cfgName: cfg ? cfg.name : undefined,
+    total: elements.length,
+    shown: elements.length,
+    elements: elements,
+    samples: elements,
+  };
+}
+
 chrome.runtime.onMessage.addListener(function(request,sender,sendResponse){
   if(request.type==="__CHATLINK_DIAGNOSTICS__"){sendResponse({version:EXTRACTOR_VERSION,cfgName:getCfg?getCfg()?.name:null,hasConfirmationSignal:true,hasGetCfgNameFix:true});return true;}
-  if(request.type==="SEND_MESSAGE"){sendMessage(request.text||request.message,request.confirmation||"confirmed").then(sendResponse).catch(function(e){sendResponse({ok:false,sent:false,error:e.message});});return true;}
+  if(request.type==="SEND_MESSAGE"){sendMessage(request.text||request.message,request.confirmation||"confirmed",{startNewChat:!!request.startNewChat}).then(sendResponse).catch(function(e){sendResponse({ok:false,sent:false,error:e.message});});return true;}
   if(request.type==="EXTRACT_CHAT")sendResponse(extractChat(request.sinceIndex||0));
   if(request.type==="EXTRACT_PAGE")sendResponse(extractPage());
   if(request.type==="EXTRACT_ARTIFACTS"){extractArtifacts(request.includeLinks||false,request.maxLinks||10).then(sendResponse);return true;}
+  if(request.type==="__CHATLINK_DOM_DUMP__"){sendResponse(domDump());return true;}
   return true;
 });
