@@ -7,6 +7,7 @@ import { z } from "zod";
 import { ExtensionBridge } from "./bridge.js";
 import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
 import { delegateTimings } from "./config.js";
+import { normalizeForComparison, extractNewAssistantText } from "./completion-tracker.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -637,10 +638,6 @@ function registerTools(server: McpServer) {
           content: normalizeForComparison(m.content),
         }));
         const baselineAssistantContent = [...baselineMessages].reverse().find(m => m.role === "assistant")?.content ?? "";
-
-        function normalizeForComparison(text: string): string {
-          return text.replace(/\s+/g, " ").trim();
-        }
 
         function getNewAssistantText(chat: Awaited<ReturnType<typeof bridge.getChat>>): string {
           const messages = chat.messages;

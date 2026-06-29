@@ -15,8 +15,13 @@ import {
 const BRIDGE_PORT = 27182;
 const RETRY_DELAY_MS = 500;
 const MAX_RETRIES = 12; // ~1 minute of retrying
-const CHATLINK_EXTENSION_ID = "nihicengifllbhdmcoielfdhflnbbnoh";
-const TRUSTED_EXTENSION_ORIGIN = `chrome-extension://${CHATLINK_EXTENSION_ID}`;
+
+function isTrustedOrigin(origin: string): boolean {
+  // MV3 service workers may omit Origin when fetching localhost
+  if (!origin) return true;
+  // Only chrome-extension:// origins can reach localhost:27182
+  return origin.startsWith("chrome-extension://");
+}
 
 interface PendingRequest {
   responseSchema: z.ZodType<unknown>;
@@ -126,7 +131,7 @@ export class ExtensionBridge {
         // Chrome MV3 service workers may omit Origin when fetching localhost.
         // If Origin is present, only the packaged ChatLink extension may fetch the token.
         const origin = req.headers["origin"] ?? "";
-        if (origin && origin !== TRUSTED_EXTENSION_ORIGIN) {
+        if (!isTrustedOrigin(origin)) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden — untrusted origin: " + origin);
           return;

@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/completion-tracker.test.js",
+    "test": "npm run build && node --test dist/*.test.js",
     "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
