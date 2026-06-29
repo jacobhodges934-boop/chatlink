@@ -13,7 +13,7 @@
 (function() {
 
 // ── Version marker (bump on every change to force fresh injection) ──────
-var EXTRACTOR_VERSION = 23;
+var EXTRACTOR_VERSION = 24;
 window.__CHATLINK_EXTRACTOR_VERSION__ = EXTRACTOR_VERSION;
 document.documentElement.dataset.chatlinkExtractorVersion = String(EXTRACTOR_VERSION);
 
@@ -527,10 +527,10 @@ const EXTRACTORS = {
       for (var z = 0; z < zeroStateRoots.length; z++) {
         var root = zeroStateRoots[z];
         if (!vis(root)) continue;
-        if (root.closest &&
+        if (root.closest && root.closest(
           'rich-textarea, textarea, input, button, nav, header, footer, aside, ' +
           '[role="navigation"], [role="textbox"], .send-button-container, [class*="composer" i]'
-        ) continue;
+        )) continue;
         var rootText = textOf(root).replace(/^(Gemini\s*(说|says)?|Google Gemini)\s*/i, "").trim();
         if (!rootText) continue;
         zeroStateMessages.push({ role: "assistant", content: rootText });
@@ -2220,7 +2220,7 @@ async function sendMessage(text,confirmation,options){
   var method,sendAction;
   var cfg=getCfg?getCfg():{};
   // Gemini: Angular Material button ignores synthetic clicks. Use Enter on input.
-  if(cfg.name==="gemin" && input.tagName!=="TEXTAREA" && input.tagName!=="INPUT"){
+  if(cfg.name==="gemini" && input.tagName!=="TEXTAREA" && input.tagName!=="INPUT"){
     method="enter";sendAction=function(){
       input.focus();
       input.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",which:13,keyCode:13,bubbles:true,cancelable:true,composed:true}));

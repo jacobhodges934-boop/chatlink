@@ -777,6 +777,8 @@ function registerTools(server: McpServer) {
         // extend beyond deadline — polling costs nothing.
         let deadline = startedAt + Math.max(delegateTimings.minimumTimeoutSeconds, timeout ?? 180) * 1000;
         const maxExtendedDeadline = deadline + Math.max(300, (timeout ?? 180) * 2) * 1000;
+        // Absolute hard cap that cannot be exceeded by any soft-extension path
+        const absoluteDeadline = startedAt + Math.max(600, (timeout ?? 180) * 4) * 1000;
         let lastChangedAt = Date.now();
         let sawExplicitGenerating = !!(sent.confirmationSignal && sent.confirmationSignal !== "dispatched" && sent.confirmationSignal !== "timeout");
         let sawAssistantContent = false;
@@ -821,6 +823,8 @@ function registerTools(server: McpServer) {
         let prevConfidence = baselineConfidence || "";
         while (true) {
           // Soft timeout: keep polling if AI is active. Only exit when truly idle.
+          // Absolute deadline: unconditional hard stop, prevents infinite polling
+          if (Date.now() >= absoluteDeadline) break;
           const quietDeadline = lastGenerationActivity + 60_000;
           const extended = sawExplicitGenerating && Date.now() < quietDeadline;
           const gentle = sawAssistantContent && Date.now() < maxExtendedDeadline;
@@ -875,6 +879,9 @@ function registerTools(server: McpServer) {
             : getNewAssistantText(chat);
 
           if (!assistantText) continue;
+          // Tier 3 / low-confidence fallback content is UI-polluted (sidebar, nav, etc.).
+          // Never complete on it — keep polling for higher-tier structured extraction.
+          if (chat.extractionMeta?.confidence === "low") continue;
           sawAssistantContent = true;
           // NOTE: Do NOT set sawExplicitGenerating here — content appearing is not DOM detection
 
@@ -889,7 +896,8 @@ function registerTools(server: McpServer) {
 
           // Strategy A: explicit DOM generation-end signal → short quiet period → re-read
           // REQUIRES sawExplicitGenerating (real DOM signal), not just content appearing
-          if (sawExplicitGenerating && (startNewChat || chat.isGenerating !== true) && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
+          // Grok exception: thinking container keeps isGenerating=true permanently
+          if (sawExplicitGenerating && ((startNewChat && platform === "grok") || chat.isGenerating !== true) && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
             await new Promise(r => setTimeout(r, delegateTimings.finalReadDelayMs));
             const finalChat = await bridge.getChat(targetTab.tabId);
             const finalText = startNewChat
@@ -905,8 +913,8 @@ function registerTools(server: McpServer) {
           }
 
           // Strategy B: content stability — works without DOM signals, longer wait
-          // For startNewChat, isGenerating may stay true even after completion (Grok)
-          const generatingDone = startNewChat ? true : chat.isGenerating !== true;
+          // Grok exception: thinking container may keep isGenerating=true permanently
+          const generatingDone = (startNewChat && platform === "grok") ? true : chat.isGenerating !== true;
           if (sawAssistantContent && generatingDone && stablePolls >= delegateTimings.contentStabilityPolls && Date.now() - lastChangedAt >= delegateTimings.contentStabilityMs) {
             const finalChat = await bridge.getChat(targetTab.tabId);
             const finalText = startNewChat

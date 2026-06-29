@@ -245,6 +245,7 @@ function updateBadge(isConnected) {
 // ── Tab send queue & dedup cache ───────────────────────────────────────
 const tabSendQueues = new Map();
 const completedSendOps = new Map();
+const inFlightSendOps = new Set(); // prevent concurrent same-operation sends
 const SEND_OP_TTL_MS = 2 * 60 * 1000;
 const DEDUP_STORAGE_KEY = "completedSendOps";
 
@@ -274,6 +275,8 @@ function enqueueTabSend(tabId, fn) {
 
 function getDedupResult(operationId) {
   if (!operationId) return null;
+  // Reject concurrent in-flight duplicates
+  if (inFlightSendOps.has(operationId)) return { error: "DUPLICATE_IN_FLIGHT", sent: false, ok: false, success: false };
   const c = completedSendOps.get(operationId);
   if (!c) return null;
   if (Date.now() - c.ts > SEND_OP_TTL_MS) { completedSendOps.delete(operationId); return null; }
@@ -516,6 +519,7 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
     if (operationId) {
       const dup = getDedupResult(operationId);
       if (dup) { send({ type: "send_message_result", requestId, ...dup }); return; }
+      inFlightSendOps.add(operationId);
     }
 
     let tab;
@@ -574,9 +578,10 @@ async function handleSendMessage(requestId, targetTabId, text, platform, operati
       method: result.method,
       confirmationSignal: result.confirmationSignal,
     };
-    if (operationId) setDedupResult(operationId, r);
+    if (operationId) { inFlightSendOps.delete(operationId); setDedupResult(operationId, r); }
     send({ type: "send_message_result", requestId, ...r });
   } catch (err) {
+    if (operationId) inFlightSendOps.delete(operationId);
     sendError(requestId, "background.send_message", err);
   }
 }
