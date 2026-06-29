@@ -6,6 +6,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { z } from "zod";
 import { ExtensionBridge } from "./bridge.js";
 import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
+import { delegateTimings } from "./config.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -701,7 +702,7 @@ function registerTools(server: McpServer) {
         }
 
         const startedAt = Date.now();
-        const deadline = startedAt + Math.max(5, timeout ?? 120) * 1000;
+        const deadline = startedAt + Math.max(delegateTimings.minimumTimeoutSeconds, timeout ?? 180) * 1000;
         let lastAssistant = "";
         let lastChangedAt = Date.now();
         // sawExplicitGenerating: ONLY set by DOM signals (isGenerating===true or "generation_started" confirmation)
@@ -722,7 +723,7 @@ function registerTools(server: McpServer) {
 
         let pollCount = 0;
         while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, pollCount < 6 ? 700 : 1250));
+          await new Promise(r => setTimeout(r, pollCount < delegateTimings.fastPollCount ? delegateTimings.fastPollMs : delegateTimings.slowPollMs));
           pollCount++;
           const chat = await bridge.getChat(targetTab.tabId);
           // Only DOM-based signals can set sawExplicitGenerating
@@ -759,8 +760,8 @@ function registerTools(server: McpServer) {
 
           // Strategy A: explicit DOM generation-end signal → short quiet period → re-read
           // REQUIRES sawExplicitGenerating (real DOM signal), not just content appearing
-          if (sawExplicitGenerating && chat.isGenerating !== true && stablePolls >= 1 && Date.now() - lastChangedAt >= 800) {
-            await new Promise(r => setTimeout(r, 500));
+          if (sawExplicitGenerating && chat.isGenerating !== true && stablePolls >= delegateTimings.explicitEndStablePolls && Date.now() - lastChangedAt >= delegateTimings.explicitEndQuietMs) {
+            await new Promise(r => setTimeout(r, delegateTimings.finalReadDelayMs));
             const finalChat = await bridge.getChat(targetTab.tabId);
             const finalText = getNewAssistantText(finalChat);
             if (!finalText || finalText === lastAssistant) {
@@ -773,7 +774,7 @@ function registerTools(server: McpServer) {
           }
 
           // Strategy B: content stability — works without DOM signals, longer wait
-          if (sawAssistantContent && chat.isGenerating !== true && stablePolls >= 2 && Date.now() - lastChangedAt >= 3500) {
+          if (sawAssistantContent && chat.isGenerating !== true && stablePolls >= delegateTimings.contentStabilityPolls && Date.now() - lastChangedAt >= delegateTimings.contentStabilityMs) {
             const finalChat = await bridge.getChat(targetTab.tabId);
             const finalText = getNewAssistantText(finalChat);
             if (finalText === lastAssistant) {

@@ -1,53 +1,4 @@
-export interface AiTab {
-  tabId: number;
-  url: string;
-  title: string;
-  platform: string;
-  active: boolean;
-  windowId: number;
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface ChatContent {
-  tabId: number;
-  platform: string;
-  url: string;
-  title: string;
-  messages: ChatMessage[];
-  extractedAt: string;
-  isGenerating?: boolean;
-  errorState?: { detected: boolean; message?: string; element?: string };
-}
-
-export interface PageContent {
-  tabId: number;
-  platform: string;
-  url: string;
-  title: string;
-  text: string;
-  extractedAt: string;
-}
-
-export interface ClaudeArtifact {
-  type: string;    // e.g. "jsx", "md", "html", "tsx", "py", "svg", "text"
-  title: string;
-  content: string;
-}
-
-export interface ArtifactsContent {
-  tabId: number;
-  platform: string;
-  url: string;
-  title: string;
-  artifacts: ClaudeArtifact[];
-  count: number;
-  extractedAt: string;
-  note?: string | null;
-}
+import type { ServerMessage, ExtensionMessage, AiTab, ChatMessage, ChatContent, PageContent, ArtifactsContent, ClaudeArtifact } from "./protocol.js";
 
 export type ChatMcpErrorCode =
   | "BRIDGE_NOT_READY"
@@ -59,7 +10,10 @@ export type ChatMcpErrorCode =
   | "INVALID_REQUEST"
   | "TAB_NOT_FOUND"
   | "BRIDGE_START_FAILED"
-  | "UNKNOWN_ERROR";
+  | "UNKNOWN_ERROR"
+  | "INVALID_PROTOCOL_MESSAGE"
+  | "PROTOCOL_VERSION_MISMATCH"
+  | "INVALID_RESPONSE";
 
 export interface StructuredError {
   code: ChatMcpErrorCode;
@@ -99,23 +53,7 @@ export class ChatMcpError extends Error {
   }
 }
 
-// Messages from MCP server → extension
-export type ServerMessage =
-  | { type: "list_ai_tabs"; requestId: string }
-  | { type: "list_all_tabs"; requestId: string }
-  | { type: "get_chat"; requestId: string; tabId?: number }
-  | { type: "get_page"; requestId: string; tabId?: number }
-  | { type: "get_artifacts"; requestId: string; tabId?: number; includeLinks?: boolean; maxLinks?: number }
-  | { type: "send_message"; requestId: string; tabId?: number; text: string; platform?: string; operationId?: string; confirmation?: string };
 
-// Messages from extension → MCP server
-export type ExtensionMessage =
-  | { type: "connected"; version: string }
-  | { type: "ping" }
-  | { type: "ai_tabs_result"; requestId: string; tabs: AiTab[] }
-  | { type: "all_tabs_result"; requestId: string; tabs: AiTab[] }
-  | { type: "chat_result"; requestId: string; content: ChatContent }
-  | { type: "page_result"; requestId: string; content: PageContent }
-  | { type: "artifacts_result"; requestId: string; content: ArtifactsContent }
-  | { type: "error"; requestId: string; message: string; code?: ChatMcpErrorCode; stage?: string; retryable?: boolean; details?: unknown }
-  | { type: "send_message_result"; requestId: string; success: boolean; sent?: boolean; platform?: string; method?: string; confirmationSignal?: string };
+
+// ── Re-export inferred types from protocol schemas (runtime validation source of truth) ───
+export type { ServerMessage, ExtensionMessage, AiTab, ChatMessage, ChatContent, PageContent, ArtifactsContent, ClaudeArtifact } from "./protocol.js";

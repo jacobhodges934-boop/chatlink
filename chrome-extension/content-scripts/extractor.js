@@ -75,6 +75,52 @@ const EXTRACTORS = {
       '[data-testid*="stream" i]',
       '[aria-busy="true"]',
     ],
+    errorRules: [
+      {
+        id: "chatgpt_rate_limit_toast",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="toast" i]',
+          '[class*="toast" i]',
+          '[class*="notification" i]',
+        ],
+        patterns: [/rate limit/i, /too many requests/i, /try again later/i, /temporarily unavailable/i],
+        code: "RATE_LIMIT",
+        retryable: true,
+        source: "platform_rule",
+      },
+      {
+        id: "chatgpt_usage_limit_banner",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="banner" i]',
+          '[class*="banner" i]',
+          '[class*="limit" i]',
+        ],
+        patterns: [/usage limit/i, /message limit/i, /quota exceeded/i, /limit.*reset/i, /upgrade.*plan/i],
+        code: "USAGE_LIMIT",
+        retryable: false,
+        source: "platform_rule",
+      },
+      {
+        id: "chatgpt_auth_required",
+        selectors: [
+          '[role="alert"]',
+          '[data-testid*="login" i]',
+          '[data-testid*="sign-in" i]',
+          '[class*="login" i]',
+          '[class*="sign-in" i]',
+        ],
+        patterns: [/log in/i, /login required/i, /sign in/i, /session expired/i, /authentication required/i],
+        code: "AUTH_REQUIRED",
+        retryable: false,
+        source: "platform_rule",
+      },
+    ],
     detect: () =>
       location.hostname === "chat.openai.com" || location.hostname === "chatgpt.com",
 
@@ -130,6 +176,24 @@ const EXTRACTORS = {
       '[data-testid*="loading" i]',
       '[aria-busy="true"]',
       '[role="status"]',
+    ],
+    errorRules: [
+      {
+        id: "claude_usage_limit_banner",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="banner" i]',
+          '[class*="banner" i]',
+          '[class*="limit" i]',
+          '[class*="toast" i]',
+        ],
+        patterns: [/usage limit/i, /message limit/i, /limit.*reached/i, /limit.*reset/i, /capacity/i, /try again later/i],
+        code: "USAGE_LIMIT",
+        retryable: false,
+        source: "platform_rule",
+      },
     ],
     detect: () => location.hostname === "claude.ai",
 
@@ -192,6 +256,25 @@ const EXTRACTORS = {
       '[class*="loading" i]',
       '[class*="generating" i]',
     ],
+    errorRules: [
+      {
+        id: "gemini_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          'mat-snack-bar-container',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /服务.*不可用/i, /网络.*错误/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
+    ],
     detect: () => location.hostname === "gemini.google.com",
 
     extract() {
@@ -240,6 +323,25 @@ const EXTRACTORS = {
       '[class*="streaming" i]',
       '[class*="thinking" i]',
       '[class*="loading" i]',
+    ],
+    errorRules: [
+      {
+        id: "grok_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+          '[class*="notification" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /服务.*不可用/i, /网络.*错误/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
     ],
     detect: () => location.hostname === "grok.com",
 
@@ -310,6 +412,25 @@ const EXTRACTORS = {
       '[class*="thinking" i]',
       '[aria-busy="true"]',
       '[role="progressbar"]',
+    ],
+    errorRules: [
+      {
+        id: "deepseek_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+          '[class*="notification" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /服务.*不可用/i, /网络.*错误/i, /出错了/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
     ],
     detect: () => location.hostname === "chat.deepseek.com",
 
@@ -387,6 +508,25 @@ const EXTRACTORS = {
       '[class*="generating" i]',
       '[aria-busy="true"]',
     ],
+    errorRules: [
+      {
+        id: "mistral_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+          '[class*="notification" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /service unavailable/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
+    ],
     detect: () => location.hostname === "chat.mistral.ai",
 
     extract() {
@@ -461,6 +601,25 @@ const EXTRACTORS = {
       '[class*="loading" i]',
       '[aria-busy="true"]',
       '[role="progressbar"]',
+    ],
+    errorRules: [
+      {
+        id: "perplexity_generic_error_alert",
+        selectors: [
+          '[role="alert"]',
+          '[role="status"]',
+          '[aria-live]',
+          '[data-testid*="error" i]',
+          '[class*="error" i]',
+          '[class*="toast" i]',
+          '[class*="banner" i]',
+          '[class*="notification" i]',
+        ],
+        patterns: [/something went wrong/i, /\berror\b/i, /failed/i, /unavailable/i, /try again/i, /network/i, /service unavailable/i],
+        code: "PLATFORM_ERROR",
+        retryable: true,
+        source: "platform_rule",
+      },
     ],
     detect: () =>
       location.hostname === "perplexity.ai" || location.hostname === "www.perplexity.ai",
@@ -632,39 +791,109 @@ function isGeneratingNow() {
   return false;
 }
 
-function detectErrorState() {
-  // 1. Structural signals: retry buttons, login prompts, captcha
+function buildErrorState(rule, text, element) {
+  return {
+    detected: true,
+    code: rule.code,
+    message: String(text || "").trim().slice(0, 300),
+    element: element,
+    ruleId: rule.id,
+    source: rule.source,
+    retryable: rule.retryable,
+  };
+}
+
+function detectRuleErrorState(rules) {
+  if (!rules) return null;
+  for (var i = 0; i < rules.length; i++) {
+    var rule = rules[i];
+    for (var j = 0; j < rule.selectors.length; j++) {
+      var els = queryAllSafe([rule.selectors[j]]);
+      for (var k = 0; k < els.length; k++) {
+        var el = els[k];
+        if (!vis(el)) continue;
+        var text = (el.textContent || "").trim();
+        if (!text) continue;
+        for (var p = 0; p < rule.patterns.length; p++) {
+          if (rule.patterns[p].test(text)) return buildErrorState(rule, text, rule.selectors[j]);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function detectErrorState(cfg) {
+  cfg = cfg || (getCfg ? getCfg() : null);
+
+  // 1. Platform-specific rules
+  var platformRule = detectRuleErrorState(cfg && cfg.errorRules);
+  if (platformRule) return platformRule;
+
+  // 2. Retry/regenerate controls
   var retryBtn = document.querySelector(
     'button[data-testid*="retry" i],button[aria-label*="retry" i],' +
     'button[aria-label*="regenerate" i],.retry-btn,.regenerate-btn'
   );
   if (retryBtn && vis(retryBtn)) {
-    return { detected: true, message: "Retry/regenerate button visible — likely rate-limited or error", element: "retry-button" };
+    return {
+      detected: true,
+      code: "PLATFORM_ERROR",
+      message: "Retry/regenerate button visible - likely rate-limited or error",
+      element: "retry-button",
+      ruleId: "retry_control_visible",
+      source: "retry_control",
+      retryable: true,
+    };
   }
 
+  // 3. Auth and captcha controls
   var loginPrompt = document.querySelector(
     '[data-testid*="login" i],[data-testid*="sign-in" i],' +
-    '.login-prompt,.sign-in-prompt,#login-form'
+    '.login-prompt,.sign-in-prompt,#login-form,[class*="login" i],[class*="sign-in" i]'
   );
   if (loginPrompt && vis(loginPrompt)) {
-    return { detected: true, message: "Login/sign-in prompt visible", element: "login-prompt" };
+    return {
+      detected: true,
+      code: "AUTH_REQUIRED",
+      message: "Login/sign-in prompt visible",
+      element: "login-prompt",
+      ruleId: "auth_prompt_visible",
+      source: "auth_captcha",
+      retryable: false,
+    };
   }
 
-  // 2. Text-based check only within error containers (not full page)
+  var captchaPrompt = document.querySelector(
+    '[data-testid*="captcha" i],[class*="captcha" i],[id*="captcha" i],' +
+    '[aria-label*="captcha" i],[aria-label*="human" i],iframe[src*="captcha" i],iframe[src*="turnstile" i]'
+  );
+  if (captchaPrompt && vis(captchaPrompt)) {
+    return {
+      detected: true,
+      code: "CAPTCHA_REQUIRED",
+      message: "Captcha or human verification prompt visible",
+      element: "captcha-prompt",
+      ruleId: "captcha_prompt_visible",
+      source: "auth_captcha",
+      retryable: false,
+    };
+  }
+
+  // 4. Text-based check only within error containers (not full page)
   var errorSelectors = [
     '[role="alert"]', '[role="status"]', '.alert', '.error', '.warning',
     '.notification', '.toast', '.banner',
     '[data-testid*="error" i]', '[data-testid*="alert" i]',
   ];
-  var errorPatterns = [
-    /rate limit/i, /usage limit/i, /quota exceeded/i, /too many requests/i,
-    /login required/i, /sign in/i, /session expired/i,
-    /captcha/i, /verify you.?re human/i,
-    /something went wrong/i, /error generating/i, /unavailable/i,
-    /network error/i, /connection lost/i,
-    /response blocked/i, /content filtered/i, /violates.*policy/i,
-    /您已经达到.*上限/i, /用量.*限制/i, /请登录/i, /验证码/i,
-    /网络.*错误/i, /服务.*不可用/i,
+  var errorTextRules = [
+    { id: "text_rate_limit", code: "RATE_LIMIT", retryable: true, patterns: [/rate limit/i, /too many requests/i] },
+    { id: "text_usage_limit", code: "USAGE_LIMIT", retryable: false, patterns: [/usage limit/i, /quota exceeded/i, /您已经达到.*上限/i, /用量.*限制/i] },
+    { id: "text_auth_required", code: "AUTH_REQUIRED", retryable: false, patterns: [/login required/i, /sign in/i, /session expired/i, /请登录/i] },
+    { id: "text_captcha_required", code: "CAPTCHA_REQUIRED", retryable: false, patterns: [/captcha/i, /verify you.?re human/i, /验证码/i] },
+    { id: "text_content_blocked", code: "CONTENT_BLOCKED", retryable: false, patterns: [/response blocked/i, /content filtered/i, /violates.*policy/i] },
+    { id: "text_platform_unavailable", code: "PLATFORM_UNAVAILABLE", retryable: true, patterns: [/unavailable/i, /服务.*不可用/i] },
+    { id: "text_platform_error", code: "PLATFORM_ERROR", retryable: true, patterns: [/something went wrong/i, /error generating/i, /network error/i, /connection lost/i, /网络.*错误/i] },
   ];
   for (var i = 0; i < errorSelectors.length; i++) {
     var els = document.querySelectorAll(errorSelectors[i]);
@@ -673,9 +902,20 @@ function detectErrorState() {
       if (!vis(el)) continue;
       var text = (el.textContent || "").trim();
       if (!text) continue;
-      for (var k = 0; k < errorPatterns.length; k++) {
-        if (errorPatterns[k].test(text)) {
-          return { detected: true, message: text.slice(0, 300), element: errorSelectors[i] };
+      for (var k = 0; k < errorTextRules.length; k++) {
+        var textRule = errorTextRules[k];
+        for (var p = 0; p < textRule.patterns.length; p++) {
+          if (textRule.patterns[p].test(text)) {
+            return {
+              detected: true,
+              code: textRule.code,
+              message: text.slice(0, 300),
+              element: errorSelectors[i],
+              ruleId: textRule.id,
+              source: "error_container_text",
+              retryable: textRule.retryable,
+            };
+          }
         }
       }
     }
@@ -714,7 +954,7 @@ function extractChat() {
           messages,
           extractedAt: new Date().toISOString(),
           isGenerating: isGeneratingNow(),
-          errorState: detectErrorState(),
+          errorState: detectErrorState(ext),
         };
       } catch (err) {
         return { error: `Extraction failed on ${name}: ${err.message}` };

@@ -1,7 +1,16 @@
 import { createServer as createHttpServer, type IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomBytes } from "crypto";
-import { ChatMcpError, type ServerMessage, type ExtensionMessage, type AiTab, type ChatContent, type PageContent, type ArtifactsContent, type ChatMcpErrorCode, type StructuredError } from "./types.js";
+import { z } from "zod";
+import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
+import {
+  ServerMessageSchema, ExtensionMessageSchema,
+  AiTabsResultSchema, ChatResultSchema, PageResultSchema,
+  ArtifactsResultSchema, SendMessageResultSchema,
+  MAX_WS_FRAME_BYTES, PROTOCOL_VERSION,
+  type ServerMessage, type ExtensionMessage, type AiTab,
+  type ChatContent, type PageContent, type ArtifactsContent,
+} from "./protocol.js";
 
 const BRIDGE_PORT = 27182;
 const RETRY_DELAY_MS = 500;
@@ -10,6 +19,8 @@ const CHATLINK_EXTENSION_ID = "nihicengifllbhdmcoielfdhflnbbnoh";
 const TRUSTED_EXTENSION_ORIGIN = `chrome-extension://${CHATLINK_EXTENSION_ID}`;
 
 interface PendingRequest {
+  responseSchema: z.ZodType<unknown>;
+  expectedType: string;
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timeout: NodeJS.Timeout;
@@ -220,12 +231,7 @@ export class ExtensionBridge {
     this.client = ws;
 
     ws.on("message", (data) => {
-      try {
-        const msg = JSON.parse(data.toString()) as ExtensionMessage;
-        this.handleExtensionMessage(msg);
-      } catch (err) {
-        process.stderr.write(`Ignoring malformed extension message: ${String(err)}\n`);
-      }
+      this.handleIncomingFrame(data);
     });
 
     ws.on("close", () => {
@@ -246,31 +252,78 @@ export class ExtensionBridge {
     });
   }
 
-  private handleExtensionMessage(msg: ExtensionMessage) {
-    if (msg.type === "connected") {
-      process.stderr.write(`ChatMCP extension connected (v${msg.version})\n`);
+    private handleIncomingFrame(data: unknown): void {
+    // Step 1: Reject oversized frames
+    const raw = typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString() : JSON.stringify(data);
+    if (Buffer.byteLength(raw, "utf8") > MAX_WS_FRAME_BYTES) {
+      process.stderr.write("[ChatMCP] Ignoring oversized frame: " + Buffer.byteLength(raw, "utf8") + " bytes > " + MAX_WS_FRAME_BYTES + "\n");
       return;
     }
-
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (err) {
+      process.stderr.write("[ChatMCP] Ignoring unparseable frame: " + String(err) + "\n");
+      return;
+    }
+    const schemaResult = ExtensionMessageSchema.safeParse(parsed);
+    if (!schemaResult.success) {
+      const rid = typeof parsed.requestId === "string" ? parsed.requestId : "?";
+      process.stderr.write("[ChatMCP] Protocol validation failed (type=" + String(parsed.type) + ", requestId=" + rid + "): " + schemaResult.error.message + "\n");
+      return;
+    }
+    const msg = schemaResult.data;
+    if (parsed.protocolVersion !== undefined && parsed.protocolVersion !== PROTOCOL_VERSION) {
+      process.stderr.write("[ChatMCP] Protocol version mismatch: got " + parsed.protocolVersion + ", expected " + PROTOCOL_VERSION + "\n");
+      try { this.client?.close(4001, "Protocol version mismatch"); } catch {}
+      return;
+    }
+    if (msg.type === "connected") {
+      process.stderr.write("ChatMCP extension connected (v" + msg.version + ")" + "\n");
+      return;
+    }
+    if (msg.type === "ping") { return; }
+    if (!("requestId" in msg)) return;
+    const req = this.pending.get(msg.requestId);
+    if (!req) {
+      process.stderr.write("[ChatMCP] No pending request found for requestId=" + msg.requestId + ", type=" + msg.type + "\n");
+      return;
+    }
+    clearTimeout(req.timeout); this.pending.delete(msg.requestId);
+    if (msg.type === "error") {
+      req.reject(this.makeError((msg.code ?? this.classifyErrorCode(msg.message)) as ChatMcpErrorCode, "extension", msg.message, msg.requestId, msg.retryable ?? this.isRetryableExtensionError(msg.message), msg.details));
+      return;
+    }
+    if (msg.type !== req.expectedType) {
+      req.reject(this.makeError("INVALID_RESPONSE", "bridge.handleIncomingFrame", "Expected response type " + req.expectedType + " but got " + msg.type + ".", msg.requestId, false));
+      return;
+    }
+    const responseResult = req.responseSchema.safeParse(msg);
+    if (!responseResult.success) {
+      req.reject(this.makeError("INVALID_RESPONSE", "bridge.handleIncomingFrame", "Response schema validation failed for " + msg.type + ": " + responseResult.error.message, msg.requestId, false, { zodError: responseResult.error.format() }));
+      return;
+    }
+    req.resolve(responseResult.data);
+  }
+private handleExtensionMessage(msg: ExtensionMessage) {
+    // Legacy dispatcher -- kept for backward compat
+    if (msg.type === "connected") {
+      process.stderr.write("ChatMCP extension connected (v" + msg.version + "\n");
+      return;
+    }
     if (msg.type === "ping") {
-      // Respond with pong to acknowledge keepalive
       if (this.client && this.client.readyState === WebSocket.OPEN) {
         this.client.send(JSON.stringify({ type: "pong" }));
       }
       return;
     }
-
     if (!("requestId" in msg)) return;
     const req = this.pending.get(msg.requestId);
     if (!req) return;
-
     clearTimeout(req.timeout);
     this.pending.delete(msg.requestId);
-
     if (msg.type === "error") {
       req.reject(
         this.makeError(
-          msg.code ?? this.classifyErrorCode(msg.message),
+          (msg.code ?? this.classifyErrorCode(msg.message)) as ChatMcpErrorCode,
           msg.stage ?? "extension",
           msg.message,
           msg.requestId,
@@ -283,7 +336,7 @@ export class ExtensionBridge {
     }
   }
 
-  private classifyErrorCode(message: string): ChatMcpErrorCode {
+    private classifyErrorCode(message: string): ChatMcpErrorCode {
     const lower = message.toLowerCase();
     if (lower.includes("content script") || lower.includes("receiving end") || lower.includes("could not establish connection")) {
       return "CONTENT_SCRIPT_MISSING";
@@ -299,6 +352,13 @@ export class ExtensionBridge {
   private isRetryableExtensionError(message: string): boolean {
     const code = this.classifyErrorCode(message);
     return code === "CONTENT_SCRIPT_MISSING" || code === "SUBMISSION_NOT_CONFIRMED" || code === "TAB_NOT_FOUND";
+  }
+
+  private validateOutgoing(msg: Record<string, unknown>): void {
+    const result = ServerMessageSchema.safeParse(msg);
+    if (!result.success) {
+      process.stderr.write("[ChatMCP] Outgoing message validation warning (type=" + String(msg.type) + "): " + result.error.message + "\n");
+    }
   }
 
   private send(msg: ServerMessage) {
@@ -328,7 +388,7 @@ export class ExtensionBridge {
     return `req_${++this.requestCounter}_${Date.now()}`;
   }
 
-  private request<T>(msg: Record<string, unknown>, timeoutMs = 15000): Promise<T> {
+  private request<T>(msg: Record<string, unknown>, responseSchema: z.ZodType<T>, expectedType: string, timeoutMs = 15000): Promise<T> {
     const requestId = this.makeRequestId();
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -346,6 +406,8 @@ export class ExtensionBridge {
       }, timeoutMs);
 
       this.pending.set(requestId, {
+        responseSchema: responseSchema as z.ZodType<unknown>,
+        expectedType,
         resolve: resolve as (v: unknown) => void,
         reject,
         timeout,
@@ -366,40 +428,50 @@ export class ExtensionBridge {
   }
 
   async listAiTabs(): Promise<AiTab[]> {
-    const result = await this.request<{ type: string; tabs: AiTab[] }>(
+    const result = await this.request(
       { type: "list_ai_tabs" },
+      AiTabsResultSchema,
+      "ai_tabs_result",
       10000
     );
     return result.tabs;
   }
 
   async listAllTabs(): Promise<AiTab[]> {
-    const result = await this.request<{ type: string; tabs: AiTab[] }>(
+    const result = await this.request(
       { type: "list_all_tabs" },
+      AiTabsResultSchema,
+      "all_tabs_result",
       10000
     );
     return result.tabs;
   }
 
   async getChat(tabId?: number): Promise<ChatContent> {
-    const result = await this.request<{ type: string; content: ChatContent }>(
+    const result = await this.request(
       { type: "get_chat", tabId },
+      ChatResultSchema,
+      "chat_result",
       20000
     );
     return result.content;
   }
 
   async getPage(tabId?: number): Promise<PageContent> {
-    const result = await this.request<{ type: string; content: PageContent }>(
+    const result = await this.request(
       { type: "get_page", tabId },
+      PageResultSchema,
+      "page_result",
       20000
     );
     return result.content;
   }
 
   async getArtifacts(tabId?: number, includeLinks = false, maxLinks = 10): Promise<ArtifactsContent> {
-    const result = await this.request<{ type: string; content: ArtifactsContent }>(
+    const result = await this.request(
       { type: "get_artifacts", tabId, includeLinks, maxLinks },
+      ArtifactsResultSchema,
+      "artifacts_result",
       60000
     );
     return result.content;
@@ -407,8 +479,10 @@ export class ExtensionBridge {
 
   async sendChatMessage(text: string, tabId?: number, platform?: string, confirmation: "dispatch" | "confirmed" = "confirmed"): Promise<{ success: boolean; platform?: string; method?: string; confirmationSignal?: string }> {
     const operationId = randomBytes(16).toString("hex");
-    const result = await this.request<{ type: string; success: boolean; platform?: string; method?: string; confirmationSignal?: string }>(
+    const result = await this.request(
       { type: "send_message", tabId, text, platform, operationId, confirmation },
+      SendMessageResultSchema,
+      "send_message_result",
       25000
     );
     return { success: result.success, platform: result.platform, method: result.method, confirmationSignal: result.confirmationSignal };

@@ -6,9 +6,16 @@
 
 const MCP_TOKEN_URL = "http://127.0.0.1:27182/token";
 const MCP_SERVER_BASE = "ws://127.0.0.1:27182";
-const RECONNECT_DELAY_MS = 3000;
+const connectionTimings = Object.freeze({
+  reconnectMs: 3000,
+  pingMs: 20000,
+  keepaliveAlarmMinutes: 0.3,
+  inactiveTabFocusDelayMs: 600,
+  injectionProbeIntervalMs: 100,
+  injectionProbeAttempts: 10,
+});
+
 const KEEPALIVE_ALARM = "chatmcp-keepalive";
-const KEEPALIVE_PERIOD_MINUTES = 0.3; // ~18s — tighter keepalive
 const VERSION = "1.0.0";
 const MAX_LOG_ENTRIES = 200;
 
@@ -78,7 +85,7 @@ async function clearDiagLog() {
 }
 
 // ── Keepalive alarm ─────────────────────────────────────────────────────
-chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_PERIOD_MINUTES });
+chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: connectionTimings.keepaliveAlarmMinutes });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
@@ -123,7 +130,7 @@ async function connect() {
   await diagLog("connect", "attempting...");
 
   const token = await fetchToken();
-  if (!token) { await diagLog("connect_fail", "no token, scheduling retry in " + RECONNECT_DELAY_MS + "ms"); scheduleReconnect(); return; }
+  if (!token) { await diagLog("connect_fail", "no token, scheduling retry in " + connectionTimings.reconnectMs + "ms"); scheduleReconnect(); return; }
 
   try {
     ws = new WebSocket(MCP_SERVER_BASE + "?token=" + encodeURIComponent(token));
@@ -142,7 +149,7 @@ async function connect() {
     await diagLog("ws_open", "WebSocket connected, badge=ON");
     pingTimer = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) send({ type: "ping" });
-    }, 20000);
+    }, connectionTimings.pingMs);
   });
 
   ws.addEventListener("message", (event) => {
@@ -177,7 +184,7 @@ function send(msg) {
 
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
+  reconnectTimer = setTimeout(connect, connectionTimings.reconnectMs);
 }
 
 function updateBadge(isConnected) {
@@ -212,7 +219,54 @@ function setDedupResult(operationId, result) {
 }
 
 // ── Server message handlers ─────────────────────────────────────────────
-async function handleServerMessage(msg) {
+
+// ── Protocol validation guards (lightweight, no Zod) ────────────────────
+const PROTO_VERSION = 1;
+const SUPPORTED_SERVER_TYPES = new Set(["list_ai_tabs", "list_all_tabs", "get_chat", "get_page", "get_artifacts", "send_message"]);
+const MAX_REQ_ID = 128;
+
+function validateServerMessage(msg) {
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+    console.warn("[ChatMCP] Invalid server message: not a plain object");
+    return false;
+  }
+  if (msg.protocolVersion !== undefined && msg.protocolVersion !== PROTO_VERSION) {
+    console.warn("[ChatMCP] Protocol version mismatch:", msg.protocolVersion);
+    return false;
+  }
+  if (typeof msg.type !== "string" || !SUPPORTED_SERVER_TYPES.has(msg.type)) {
+    console.warn("[ChatMCP] Unsupported message type:", msg.type);
+    return false;
+  }
+  if (typeof msg.requestId !== "string" || msg.requestId.length > MAX_REQ_ID) {
+    console.warn("[ChatMCP] Invalid or oversized requestId");
+    return false;
+  }
+  if (msg.type === "send_message") {
+    if (typeof msg.text !== "string" || msg.text.length === 0) {
+      console.warn("[ChatMCP] send_message missing text");
+      return false;
+    }
+    if (msg.confirmation !== undefined && msg.confirmation !== "dispatch" && msg.confirmation !== "confirmed") {
+      console.warn("[ChatMCP] Invalid confirmation value:", msg.confirmation);
+      return false;
+    }
+  }
+  if ((msg.type === "get_chat" || msg.type === "get_page" || msg.type === "get_artifacts") && msg.tabId !== undefined) {
+    if (!Number.isInteger(msg.tabId) || msg.tabId <= 0) {
+      console.warn("[ChatMCP] Invalid tabId:", msg.tabId);
+      return false;
+    }
+  }
+  return true;
+}
+function handleServerMessage(raw) {
+  if (!validateServerMessage(raw)) {
+    diagLog("invalid_server_message", { type: raw && raw.type, problem: "validation failed" });
+    return;
+  }
+  const msg = raw;
+  switch (msg.type) {
   switch (msg.type) {
     case "list_ai_tabs":    return handleListAiTabs(msg.requestId);
     case "list_all_tabs":   return handleListAllTabs(msg.requestId);
@@ -352,9 +406,9 @@ async function ensureContentScript(tabId) {
     // Not injected yet — force injection
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content-scripts/extractor.js"] });
 
-    // Poll until ready (up to 1s)
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 100));
+    // Poll until ready
+    for (let i = 0; i < connectionTimings.injectionProbeAttempts; i++) {
+      await new Promise(r => setTimeout(r, connectionTimings.injectionProbeIntervalMs));
       ready = await chrome.tabs.sendMessage(tabId, { type: "__CHATLINK_DIAGNOSTICS__" }).catch(() => null);
       if (ready?.version) return ready;
     }
