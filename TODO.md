@@ -23,7 +23,7 @@
 - [ ] **`screenshot_tab`** — capture a screenshot of any open tab and return it as base64 / MCP image content
 
 ## Security
-- [ ] **Rotate token on demand** — currently the auth token is regenerated only on server restart. Add a `chatmcp-server --rotate-token` flag or MCP tool for users who want to invalidate existing connections without restarting.
+- [ ] **Rotate token on demand** — currently the auth token is regenerated only on server restart. Add a `chatlink-server --rotate-token` flag or MCP tool for users who want to invalidate existing connections without restarting.
 
 ## Bug fixes
 - [x] **Bridge crash on EADDRINUSE** — `WebSocketServer` was re-emitting the port-in-use error as an unhandled event, crashing the process instead of retrying. Fixed by adding a no-op `wss.on("error", ...)` handler so the retry logic in `httpServer.on("error", ...)` runs cleanly.

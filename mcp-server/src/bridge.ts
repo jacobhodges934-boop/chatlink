@@ -2,7 +2,7 @@ import { createServer as createHttpServer, type IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { randomBytes } from "crypto";
 import { z } from "zod";
-import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
+import { ChatLinkError, type ChatLinkErrorCode, type StructuredError } from "./types.js";
 import {
   ServerMessageSchema, ExtensionMessageSchema,
   AiTabsResultSchema, ChatResultSchema, PageResultSchema,
@@ -79,14 +79,14 @@ export class ExtensionBridge {
   }
 
   private makeError(
-    code: ChatMcpErrorCode,
+    code: ChatLinkErrorCode,
     stage: string,
     message: string,
     requestId?: string,
     retryable = false,
     details?: unknown
-  ): ChatMcpError {
-    return new ChatMcpError({ code, stage, message, requestId, retryable, details });
+  ): ChatLinkError {
+    return new ChatLinkError({ code, stage, message, requestId, retryable, details });
   }
 
   private failStart(error: Error) {
@@ -311,7 +311,7 @@ export class ExtensionBridge {
     }
     clearTimeout(req.timeout); this.pending.delete(msg.requestId);
     if (msg.type === "error") {
-      req.reject(this.makeError((msg.code ?? this.classifyErrorCode(msg.message)) as ChatMcpErrorCode, "extension", msg.message, msg.requestId, msg.retryable ?? this.isRetryableExtensionError(msg.message), msg.details));
+      req.reject(this.makeError((msg.code ?? this.classifyErrorCode(msg.message)) as ChatLinkErrorCode, "extension", msg.message, msg.requestId, msg.retryable ?? this.isRetryableExtensionError(msg.message), msg.details));
       return;
     }
     if (msg.type !== req.expectedType) {
@@ -345,7 +345,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     if (msg.type === "error") {
       req.reject(
         this.makeError(
-          (msg.code ?? this.classifyErrorCode(msg.message)) as ChatMcpErrorCode,
+          (msg.code ?? this.classifyErrorCode(msg.message)) as ChatLinkErrorCode,
           msg.stage ?? "extension",
           msg.message,
           msg.requestId,
@@ -358,7 +358,7 @@ private handleExtensionMessage(msg: ExtensionMessage) {
     }
   }
 
-    private classifyErrorCode(message: string): ChatMcpErrorCode {
+    private classifyErrorCode(message: string): ChatLinkErrorCode {
     const lower = message.toLowerCase();
     if (lower.includes("content script") || lower.includes("receiving end") || lower.includes("could not establish connection")) {
       return "CONTENT_SCRIPT_MISSING";

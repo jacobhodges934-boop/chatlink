@@ -1,6 +1,6 @@
 import type { ServerMessage, ExtensionMessage, AiTab, ChatMessage, ChatContent, PageContent, ArtifactsContent, ClaudeArtifact } from "./protocol.js";
 
-export type ChatMcpErrorCode =
+export type ChatLinkErrorCode =
   | "BRIDGE_NOT_READY"
   | "EXTENSION_DISCONNECTED"
   | "CONTENT_SCRIPT_MISSING"
@@ -16,7 +16,7 @@ export type ChatMcpErrorCode =
   | "INVALID_RESPONSE";
 
 export interface StructuredError {
-  code: ChatMcpErrorCode;
+  code: ChatLinkErrorCode;
   stage: string;
   message: string;
   requestId?: string;
@@ -24,8 +24,8 @@ export interface StructuredError {
   details?: unknown;
 }
 
-export class ChatMcpError extends Error {
-  readonly code: ChatMcpErrorCode;
+export class ChatLinkError extends Error {
+  readonly code: ChatLinkErrorCode;
   readonly stage: string;
   readonly requestId?: string;
   readonly retryable: boolean;
@@ -33,7 +33,7 @@ export class ChatMcpError extends Error {
 
   constructor(error: StructuredError) {
     super(error.message);
-    this.name = "ChatMcpError";
+    this.name = "ChatLinkError";
     this.code = error.code;
     this.stage = error.stage;
     this.requestId = error.requestId;

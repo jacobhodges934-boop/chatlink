@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "http";
 import { z } from "zod";
 import { ExtensionBridge } from "./bridge.js";
-import { ChatMcpError, type ChatMcpErrorCode, type StructuredError } from "./types.js";
+import { ChatLinkError, type ChatLinkErrorCode, type StructuredError } from "./types.js";
 import { delegateTimings, resolveToken, getConfigPath } from "./config.js";
 import { normalizeForComparison, extractNewAssistantText } from "./completion-tracker.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
@@ -14,7 +14,6 @@ import { tmpdir } from "node:os";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 const HTTP_PORT = 27183;
-const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
 const processArgs = process.argv.slice(2);
 const daemonMode = processArgs.includes("--daemon");
 const SERVER_VERSION = "0.5.0";
@@ -41,10 +40,10 @@ let ignoredContextPatternsPromise: Promise<string[]> | null = null;
 function structuredError(
   err: unknown,
   stage: string,
-  fallbackCode: ChatMcpErrorCode = "UNKNOWN_ERROR",
+  fallbackCode: ChatLinkErrorCode = "UNKNOWN_ERROR",
   retryable = false
 ): StructuredError {
-  if (err instanceof ChatMcpError) return err.toJSON();
+  if (err instanceof ChatLinkError) return err.toJSON();
   const message = err instanceof Error ? err.message : String(err);
   return {
     code: fallbackCode,
@@ -55,7 +54,7 @@ function structuredError(
   };
 }
 
-function toolError(err: unknown, stage: string, fallbackCode: ChatMcpErrorCode = "UNKNOWN_ERROR", retryable = false) {
+function toolError(err: unknown, stage: string, fallbackCode: ChatLinkErrorCode = "UNKNOWN_ERROR", retryable = false) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(structuredError(err, stage, fallbackCode, retryable), null, 2) }],
     isError: true,
@@ -64,10 +63,10 @@ function toolError(err: unknown, stage: string, fallbackCode: ChatMcpErrorCode =
 
 function notConnectedError(stage: string) {
   return toolError(
-    new ChatMcpError({
+    new ChatLinkError({
       code: "EXTENSION_DISCONNECTED",
       stage,
-      message: "The ChatMCP Chrome extension is not connected. Please install the extension and make sure it is enabled.",
+      message: "The ChatLink Chrome extension is not connected. Please install the extension and make sure it is enabled.",
       retryable: true,
     }),
     stage
@@ -502,7 +501,7 @@ function registerTools(server: McpServer) {
   // ── extension_status ────────────────────────────────────────────────────
   server.tool(
     "extension_status",
-    "Check whether the ChatMCP Chrome extension is connected and ready.",
+    "Check whether the ChatLink Chrome extension is connected and ready.",
     {},
     async () => {
       const connected = bridge.isConnected();
@@ -511,8 +510,8 @@ function registerTools(server: McpServer) {
           {
             type: "text",
             text: connected
-              ? "ChatMCP extension is connected and ready."
-              : "ChatMCP extension is NOT connected. Install the extension from the chrome-extension/ folder and enable it.",
+              ? "ChatLink extension is connected and ready."
+              : "ChatLink extension is NOT connected. Install the extension from the chrome-extension/ folder and enable it.",
           },
         ],
       };
@@ -619,7 +618,7 @@ function registerTools(server: McpServer) {
         const taskFindings = findContextSecretFindings(task);
         if (taskFindings.length > 0) {
           return toolError(
-            new ChatMcpError({
+            new ChatLinkError({
               code: "UNKNOWN_ERROR",
               stage: "delegate_coding_task.task_security",
               message:
@@ -638,7 +637,7 @@ function registerTools(server: McpServer) {
           const sanitizedContext = await sanitizeDelegateContext(context);
           if (sanitizedContext.findings.length > 0) {
             return toolError(
-              new ChatMcpError({
+              new ChatLinkError({
                 code: "UNKNOWN_ERROR",
                 stage: "delegate_coding_task.context_security",
                 message:
@@ -765,7 +764,7 @@ function registerTools(server: McpServer) {
         }
         if (!sent?.success) {
           return toolError(
-            new ChatMcpError({
+            new ChatLinkError({
               code: "SUBMISSION_NOT_CONFIRMED",
               stage: "delegate_coding_task.send",
               message: "Failed to send.",
@@ -999,8 +998,8 @@ function registerTools(server: McpServer) {
 // ── Port ownership & lifecycle management
 // ── Port ownership & lifecycle management
 // ── Port ownership & lifecycle management ──────────────────────────────────
-const CHATMCP_PORT = 27182;
-const OWNER_FILE = join(tmpdir(), `chatmcp-${CHATMCP_PORT}.owner.json`);
+const CHATLINK_PORT = 27182;
+const OWNER_FILE = join(tmpdir(), `chatlink-${CHATLINK_PORT}.owner.json`);
 const instanceId = randomUUID();
 let shuttingDown = false;
 let parentMonitor: ReturnType<typeof setInterval> | undefined;
@@ -1014,16 +1013,16 @@ function isProcessAlive(pid: number): boolean {
 async function readPortOwner(): Promise<{ service: string; port: number; pid: number; parentPid: number; instanceId: string; startedAt: string } | null> {
   try {
     const c = JSON.parse(await readFile(OWNER_FILE, "utf8"));
-    if (c.service !== "chatmcp" || c.port !== CHATMCP_PORT || !c.pid || !c.parentPid || !c.instanceId) return null;
+    if (c.service !== "chatlink" || c.port !== CHATLINK_PORT || !c.pid || !c.parentPid || !c.instanceId) return null;
     return c;
   } catch (err) {
-    process.stderr.write(`[ChatMCP] Ignoring unreadable owner file: ${String(err)}\n`);
+    process.stderr.write(`[ChatLink] Ignoring unreadable owner file: ${String(err)}\n`);
     return null;
   }
 }
 async function writePortOwner(): Promise<void> {
   const parentPid = daemonMode ? process.pid : process.ppid;
-  await writeFile(OWNER_FILE, JSON.stringify({ service: "chatmcp", port: CHATMCP_PORT, pid: process.pid, parentPid, instanceId, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  await writeFile(OWNER_FILE, JSON.stringify({ service: "chatlink", port: CHATLINK_PORT, pid: process.pid, parentPid, instanceId, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 async function removeOwnPortOwner(): Promise<void> {
   const o = await readPortOwner();
@@ -1031,7 +1030,7 @@ async function removeOwnPortOwner(): Promise<void> {
   try {
     await unlink(OWNER_FILE);
   } catch (err) {
-    process.stderr.write(`[ChatMCP] Failed to remove owner file: ${String(err)}\n`);
+    process.stderr.write(`[ChatLink] Failed to remove owner file: ${String(err)}\n`);
   }
 }
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
@@ -1041,14 +1040,14 @@ async function waitForProcessExit(pid: number, timeoutMs = 2000): Promise<boolea
   return !isProcessAlive(pid);
 }
 
-async function reclaimStaleChatMcp(): Promise<void> {
+async function reclaimStaleChatLink(): Promise<void> {
   let owner = await readPortOwner();
   if (!owner || owner.pid === process.pid) return;
   if (!isProcessAlive(owner.pid)) {
     try {
       await unlink(OWNER_FILE);
     } catch (err) {
-      process.stderr.write(`[ChatMCP] Failed to remove stale owner file: ${String(err)}\n`);
+      process.stderr.write(`[ChatLink] Failed to remove stale owner file: ${String(err)}\n`);
     }
     return;
   }
@@ -1057,7 +1056,7 @@ async function reclaimStaleChatMcp(): Promise<void> {
       try {
         await unlink(OWNER_FILE);
       } catch (err) {
-        process.stderr.write(`[ChatMCP] Failed to remove stale owner file: ${String(err)}\n`);
+        process.stderr.write(`[ChatLink] Failed to remove stale owner file: ${String(err)}\n`);
       }
       return;
     }
@@ -1067,19 +1066,19 @@ async function reclaimStaleChatMcp(): Promise<void> {
     if (lo && lo.instanceId !== owner.instanceId) owner = lo;
   }
   if (isProcessAlive(owner.parentPid)) return; // another session still alive
-  process.stderr.write(`[ChatMCP] Auto-reclaiming stale process PID=${owner.pid}\n`);
+  process.stderr.write(`[ChatLink] Auto-reclaiming stale process PID=${owner.pid}\n`);
   try {
     process.kill(owner.pid, "SIGTERM");
   } catch (err) {
-    process.stderr.write(`[ChatMCP] Failed to signal stale process PID=${owner.pid}: ${String(err)}\n`);
+    process.stderr.write(`[ChatLink] Failed to signal stale process PID=${owner.pid}: ${String(err)}\n`);
   }
-  if (!(await waitForProcessExit(owner.pid, 2000))) throw new Error(`Unable to terminate stale ChatMCP PID=${owner.pid}`);
+  if (!(await waitForProcessExit(owner.pid, 2000))) throw new Error(`Unable to terminate stale ChatLink PID=${owner.pid}`);
   const lo = await readPortOwner();
   if (lo?.instanceId === owner.instanceId) {
     try {
       await unlink(OWNER_FILE);
     } catch (err) {
-      process.stderr.write(`[ChatMCP] Failed to remove reclaimed owner file: ${String(err)}\n`);
+      process.stderr.write(`[ChatLink] Failed to remove reclaimed owner file: ${String(err)}\n`);
     }
   }
 }
@@ -1088,17 +1087,17 @@ async function shutdown(reason: string, exitCode = 0): Promise<never> {
   if (shuttingDown) process.exit(exitCode);
   shuttingDown = true;
   if (parentMonitor) { clearInterval(parentMonitor); parentMonitor = undefined; }
-  process.stderr.write(`[ChatMCP] Shutting down: ${reason}\n`);
+  process.stderr.write(`[ChatLink] Shutting down: ${reason}\n`);
   const force = setTimeout(() => process.exit(exitCode), 1500); force.unref();
   try {
     await bridge.close(reason);
   } catch (err) {
-    process.stderr.write(`[ChatMCP] Bridge close failed: ${String(err)}\n`);
+    process.stderr.write(`[ChatLink] Bridge close failed: ${String(err)}\n`);
   }
   try {
     await removeOwnPortOwner();
   } catch (err) {
-    process.stderr.write(`[ChatMCP] Owner cleanup failed: ${String(err)}\n`);
+    process.stderr.write(`[ChatLink] Owner cleanup failed: ${String(err)}\n`);
   }
   process.exit(exitCode);
 }
@@ -1206,12 +1205,12 @@ function createHttpMcpHandler() {
     const session = sessions.get(sessionId);
     if (!session) return false;
     sessions.delete(sessionId);
-    process.stderr.write(`[ChatMCP] Closing HTTP MCP session ${sessionId}: ${reason}\n`);
+    process.stderr.write(`[ChatLink] Closing HTTP MCP session ${sessionId}: ${reason}\n`);
     if (closeTransport) {
       try {
         await session.server.close();
       } catch (err) {
-        process.stderr.write(`[ChatMCP] Failed to close MCP server for session ${sessionId}: ${String(err)}\n`);
+        process.stderr.write(`[ChatLink] Failed to close MCP server for session ${sessionId}: ${String(err)}\n`);
       }
     }
     return true;
@@ -1229,7 +1228,7 @@ function createHttpMcpHandler() {
 
   const ttlTimer = setInterval(() => {
     void cleanupIdleSessions().catch((err) => {
-      process.stderr.write(`[ChatMCP] Idle session cleanup failed: ${String(err)}\n`);
+      process.stderr.write(`[ChatLink] Idle session cleanup failed: ${String(err)}\n`);
     });
   }, 60_000);
   ttlTimer.unref();
@@ -1254,7 +1253,7 @@ function createHttpMcpHandler() {
       }
     };
     transport.onerror = (err) => {
-      process.stderr.write(`[ChatMCP] HTTP MCP transport error: ${String(err)}\n`);
+      process.stderr.write(`[ChatLink] HTTP MCP transport error: ${String(err)}\n`);
     };
 
     await server.connect(transport);
@@ -1388,7 +1387,7 @@ async function main() {
     process.exit(0);
   }
 
-  await reclaimStaleChatMcp();
+  await reclaimStaleChatLink();
   await bridge.start();
   await bridge.ensureStarted();
   await writePortOwner();
@@ -1397,7 +1396,7 @@ async function main() {
   const httpMcp = createHttpMcpHandler();
   const httpServer = createHttpServer((req, res) => {
     void httpMcp.handle(req, res).catch((err) => {
-      process.stderr.write(`[ChatMCP] HTTP handler failed: ${String(err)}\n`);
+      process.stderr.write(`[ChatLink] HTTP handler failed: ${String(err)}\n`);
       if (!res.headersSent) textResponse(res, 500, "Internal server error");
     });
   });
@@ -1414,8 +1413,7 @@ async function main() {
         `Health → http://127.0.0.1:${HTTP_PORT}/health\n` +
         `Bridge port 27182 — waiting for Chrome/Edge extension.\n` +
         `Token: ${masked}  (config: ${getConfigPath()})\n` +
-        `  Run 'node dist/index.js --token' to print the full token.\n` +
-        `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
+        `  Run 'node dist/index.js --token' to print the full token.\n`
       );
     });
     return;
@@ -1431,8 +1429,7 @@ async function main() {
   httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
     process.stderr.write(
       `ChatLink stdio + HTTP → 127.0.0.1:${HTTP_PORT}/mcp (bridge:27182)\n` +
-      `Health → http://127.0.0.1:${HTTP_PORT}/health\n` +
-      `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
+      `Health → http://127.0.0.1:${HTTP_PORT}/health\n`
     );
   });
 }
