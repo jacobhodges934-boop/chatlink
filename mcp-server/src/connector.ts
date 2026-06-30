@@ -139,7 +139,14 @@ async function withClient<T>(fn: (activeClient: Client) => Promise<T>): Promise<
   try {
     return await fn(await getClient());
   } catch (err) {
-    process.stderr.write(`[ChatLink connector] Reconnecting after daemon request failed: ${String(err)}\n`);
+    const msg = err instanceof Error ? err.message : String(err);
+    // Session deleted by TTL or daemon restart — exit, don't reconnect.
+    if (msg.includes("400") || msg.includes("404") || msg.includes("Session") || msg.includes("session")) {
+      process.stderr.write(`[ChatLink connector] Session terminated by daemon: ${msg}\n`);
+      void cleanupAndExit(0);
+      throw err;
+    }
+    process.stderr.write(`[ChatLink connector] Reconnecting after transient error: ${msg}\n`);
     await resetClient();
     return await fn(await getClient());
   }
