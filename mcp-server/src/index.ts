@@ -15,9 +15,14 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 const HTTP_PORT = 27183;
 const COFFEE_URL = "https://buymeacoffee.com/indiantinker";
+const processArgs = process.argv.slice(2);
+const daemonMode = processArgs.includes("--daemon");
+const SERVER_VERSION = "0.5.0";
 
 const HTTP_TOKEN = resolveToken();
 const MAX_MCP_BODY_BYTES = 1_048_576; // 1 MB
+const HTTP_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+const MAX_HTTP_SESSIONS = 10;
 
 const bridge = new ExtensionBridge(HTTP_TOKEN);
 
@@ -1017,7 +1022,8 @@ async function readPortOwner(): Promise<{ service: string; port: number; pid: nu
   }
 }
 async function writePortOwner(): Promise<void> {
-  await writeFile(OWNER_FILE, JSON.stringify({ service: "chatmcp", port: CHATMCP_PORT, pid: process.pid, parentPid: process.ppid, instanceId, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  const parentPid = daemonMode ? process.pid : process.ppid;
+  await writeFile(OWNER_FILE, JSON.stringify({ service: "chatmcp", port: CHATMCP_PORT, pid: process.pid, parentPid, instanceId, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 async function removeOwnPortOwner(): Promise<void> {
   const o = await readPortOwner();
@@ -1097,22 +1103,283 @@ async function shutdown(reason: string, exitCode = 0): Promise<never> {
   process.exit(exitCode);
 }
 
-// Register graceful exit listeners
-process.stdin.once("end", () => { void shutdown("stdin ended"); });
-process.stdin.once("close", () => { void shutdown("stdin closed"); });
-process.once("disconnect", () => { void shutdown("parent IPC disconnected"); });
 process.once("SIGINT", () => { void shutdown("SIGINT"); });
 process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
-process.once("SIGHUP", () => { void shutdown("SIGHUP"); });
 process.once("uncaughtException", (err) => { process.stderr.write(`Fatal: ${err.message}\n`); void shutdown("uncaughtException", 1); });
 process.once("unhandledRejection", (reason) => { process.stderr.write(`Rejection: ${reason}\n`); void shutdown("unhandledRejection", 1); });
-parentMonitor = setInterval(() => { if (!isProcessAlive(process.ppid)) void shutdown("parent process exited"); }, 1000);
-parentMonitor.unref();
+
+if (!daemonMode) {
+  process.stdin.once("end", () => { void shutdown("stdin ended"); });
+  process.stdin.once("close", () => { void shutdown("stdin closed"); });
+  process.once("disconnect", () => { void shutdown("parent IPC disconnected"); });
+  process.once("SIGHUP", () => { void shutdown("SIGHUP"); });
+  parentMonitor = setInterval(() => { if (!isProcessAlive(process.ppid)) void shutdown("parent process exited"); }, 1000);
+  parentMonitor.unref();
+}
+
+type HttpMcpSession = {
+  transport: StreamableHTTPServerTransport;
+  server: McpServer;
+  lastActivity: number;
+};
+
+function jsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
+  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
+}
+
+function textResponse(res: ServerResponse, statusCode: number, text: string, headers: Record<string, string> = {}): void {
+  res.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8", ...headers });
+  res.end(text);
+}
+
+function healthPayload(sessionCount: number) {
+  return {
+    status: "ok",
+    pid: process.pid,
+    instanceId,
+    version: SERVER_VERSION,
+    bridgeConnected: bridge.isConnected(),
+    sessionCount,
+    uptime: process.uptime(),
+  };
+}
+
+async function readMcpJsonBody(req: IncomingMessage, res: ServerResponse): Promise<{ ok: true; body?: Record<string, unknown> } | { ok: false }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let bodyTooLarge = false;
+
+  return await new Promise((resolve) => {
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_MCP_BODY_BYTES) {
+        bodyTooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      if (bodyTooLarge) {
+        textResponse(res, 413, "Request body too large. Maximum size is 1 MB.");
+        resolve({ ok: false });
+        return;
+      }
+
+      if (chunks.length === 0) {
+        resolve({ ok: true });
+        return;
+      }
+
+      try {
+        const rawBuffer = Buffer.concat(chunks);
+        const rawString = rawBuffer.toString("utf8");
+        process.stderr.write(`[utf8-debug] Raw buffer length: ${rawBuffer.length}, first 100 bytes: ${rawBuffer.slice(0, 100).toString("hex")}\n`);
+        process.stderr.write(`[utf8-debug] Decoded string (first 200 chars): ${rawString.substring(0, 200)}\n`);
+        const parsed = JSON.parse(rawString);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          textResponse(res, 400, "Invalid JSON body");
+          resolve({ ok: false });
+          return;
+        }
+        resolve({ ok: true, body: parsed as Record<string, unknown> });
+      } catch (err) {
+        process.stderr.write(`Invalid MCP HTTP JSON body: ${String(err)}\n`);
+        textResponse(res, 400, "Invalid JSON body");
+        resolve({ ok: false });
+      }
+    });
+
+    req.on("error", (err) => {
+      process.stderr.write(`MCP HTTP request error: ${String(err)}\n`);
+      if (!res.headersSent) textResponse(res, 400, "Request error");
+      resolve({ ok: false });
+    });
+  });
+}
+
+function createHttpMcpHandler() {
+  const sessions = new Map<string, HttpMcpSession>();
+
+  async function closeSession(sessionId: string, reason: string, closeTransport = true): Promise<boolean> {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    sessions.delete(sessionId);
+    process.stderr.write(`[ChatMCP] Closing HTTP MCP session ${sessionId}: ${reason}\n`);
+    if (closeTransport) {
+      try {
+        await session.server.close();
+      } catch (err) {
+        process.stderr.write(`[ChatMCP] Failed to close MCP server for session ${sessionId}: ${String(err)}\n`);
+      }
+    }
+    return true;
+  }
+
+  async function cleanupIdleSessions(): Promise<void> {
+    const now = Date.now();
+    const expired = [...sessions.entries()]
+      .filter(([, session]) => now - session.lastActivity > HTTP_SESSION_IDLE_TTL_MS)
+      .map(([sessionId]) => sessionId);
+    for (const sessionId of expired) {
+      await closeSession(sessionId, "idle timeout");
+    }
+  }
+
+  const ttlTimer = setInterval(() => {
+    void cleanupIdleSessions().catch((err) => {
+      process.stderr.write(`[ChatMCP] Idle session cleanup failed: ${String(err)}\n`);
+    });
+  }, 60_000);
+  ttlTimer.unref();
+
+  async function createSession(req: IncomingMessage, res: ServerResponse, parsedBody: Record<string, unknown>): Promise<void> {
+    await cleanupIdleSessions();
+    if (sessions.size >= MAX_HTTP_SESSIONS) {
+      textResponse(res, 429, `Too many active MCP sessions. Limit is ${MAX_HTTP_SESSIONS}.`);
+      return;
+    }
+
+    let managedSessionId: string | undefined;
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+    const server = new McpServer({ name: "chatlink", version: SERVER_VERSION });
+    registerTools(server);
+
+    transport.onclose = () => {
+      if (managedSessionId) {
+        void closeSession(managedSessionId, "transport closed", false);
+      }
+    };
+    transport.onerror = (err) => {
+      process.stderr.write(`[ChatMCP] HTTP MCP transport error: ${String(err)}\n`);
+    };
+
+    await server.connect(transport);
+
+    const originalSetHeader = res.setHeader.bind(res);
+    res.setHeader = (name: string, value: number | string | readonly string[]) => {
+      if (name.toLowerCase() === "mcp-session-id") {
+        managedSessionId = String(value);
+        sessions.set(managedSessionId, { transport, server, lastActivity: Date.now() });
+      }
+      return originalSetHeader(name, value);
+    };
+
+    await transport.handleRequest(req, res, parsedBody);
+
+    if (!managedSessionId && transport.sessionId) {
+      managedSessionId = transport.sessionId;
+      sessions.set(managedSessionId, { transport, server, lastActivity: Date.now() });
+    }
+  }
+
+  async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+    if (req.method === "GET" && url.pathname === "/health") {
+      jsonResponse(res, 200, healthPayload(sessions.size));
+      return;
+    }
+
+    if (url.pathname === "/shutdown") {
+      if (req.method !== "POST") {
+        textResponse(res, 405, "Method not allowed. Use POST.", { Allow: "POST" });
+        return;
+      }
+      const authResult = validateBearerToken(req);
+      if (!authResult.valid) {
+        textResponse(res, 401, authResult.reason ?? "Unauthorized", { "WWW-Authenticate": 'Bearer realm="chatlink-mcp"' });
+        return;
+      }
+      jsonResponse(res, 202, { status: "shutting_down", pid: process.pid, instanceId });
+      void shutdown("HTTP shutdown requested");
+      return;
+    }
+
+    if (url.pathname !== "/mcp") {
+      textResponse(res, 404, "Not found. ChatLink MCP endpoint is at /mcp");
+      return;
+    }
+
+    if (req.method !== "POST" && req.method !== "GET" && req.method !== "DELETE") {
+      textResponse(res, 405, "Method not allowed. Use POST, GET, or DELETE.", { Allow: "GET, POST, DELETE" });
+      return;
+    }
+
+    const authResult = validateBearerToken(req);
+    if (!authResult.valid) {
+      textResponse(res, 401, authResult.reason ?? "Unauthorized", { "WWW-Authenticate": 'Bearer realm="chatlink-mcp"' });
+      return;
+    }
+
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    if (req.method === "DELETE") {
+      if (!sessionId) {
+        textResponse(res, 400, "Missing Mcp-Session-Id.");
+        return;
+      }
+      const deleted = await closeSession(sessionId, "client DELETE");
+      jsonResponse(res, deleted ? 200 : 404, { deleted, sessionId });
+      return;
+    }
+
+    if (req.method === "GET") {
+      if (!sessionId || !sessions.has(sessionId)) {
+        textResponse(res, 400, "Missing or invalid Mcp-Session-Id. Initialize first.");
+        return;
+      }
+      const session = sessions.get(sessionId)!;
+      session.lastActivity = Date.now();
+      await session.transport.handleRequest(req, res);
+      return;
+    }
+
+    const bodyResult = await readMcpJsonBody(req, res);
+    if (!bodyResult.ok) return;
+
+    const parsedBody = bodyResult.body;
+    const isInitialize = parsedBody?.method === "initialize";
+    if (isInitialize && parsedBody) {
+      await createSession(req, res, parsedBody);
+      return;
+    }
+
+    if (sessionId && sessions.has(sessionId)) {
+      const session = sessions.get(sessionId)!;
+      session.lastActivity = Date.now();
+      await session.transport.handleRequest(req, res, parsedBody);
+      return;
+    }
+
+    textResponse(res, 400, "Missing or invalid Mcp-Session-Id. Initialize first.");
+  }
+
+  async function closeAll(reason: string): Promise<void> {
+    clearInterval(ttlTimer);
+    for (const sessionId of [...sessions.keys()]) {
+      await closeSession(sessionId, reason);
+    }
+  }
+
+  return {
+    handle,
+    closeAll,
+    get sessionCount() {
+      return sessions.size;
+    },
+  };
+}
 
 // ── Main entry ────────────────────────────────────────────────────────────
 async function main() {
   // ── Mode selection (lightweight: no bridge start needed) ────────────────
-  const args = process.argv.slice(2);
+  const args = processArgs;
 
   // --token: print persisted token and exit (no bridge, no port binding)
   if (args.includes("--token")) {
@@ -1126,162 +1393,48 @@ async function main() {
   await bridge.ensureStarted();
   await writePortOwner();
 
-  const httpMode = args.includes("--http");
+  const httpMode = args.includes("--http") || daemonMode;
+  const httpMcp = createHttpMcpHandler();
+  const httpServer = createHttpServer((req, res) => {
+    void httpMcp.handle(req, res).catch((err) => {
+      process.stderr.write(`[ChatMCP] HTTP handler failed: ${String(err)}\n`);
+      if (!res.headersSent) textResponse(res, 500, "Internal server error");
+    });
+  });
+
+  process.once("beforeExit", () => {
+    void httpMcp.closeAll("process beforeExit");
+  });
 
   if (httpMode) {
-  // ── HTTP mode: serves multiple clients (OpenCode, Copilot, Cursor, etc.) ──
-  // Uses MCP Streamable HTTP transport. Each request is handled statelessly so
-  // any number of clients can connect simultaneously.
-
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless — no session tracking needed
-  });
-
-  const server = new McpServer({ name: "chatlink", version: "0.5.0" });
-  registerTools(server);
-  await server.connect(transport);
-
-  const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.url !== "/mcp") {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found. ChatLink MCP endpoint is at /mcp");
-      return;
-    }
-
-    if (req.method !== "POST" && req.method !== "GET") {
-      res.writeHead(405, { "Content-Type": "text/plain", "Allow": "GET, POST" });
-      res.end("Method not allowed. Use POST for JSON-RPC or GET for SSE stream.");
-      return;
-    }
-
-    const authResult = validateBearerToken(req);
-    if (!authResult.valid) {
-      res.writeHead(401, {
-        "Content-Type": "text/plain",
-        "WWW-Authenticate": 'Bearer realm="chatlink-mcp"',
-      });
-      res.end(authResult.reason ?? "Unauthorized");
-      return;
-    }
-
-    // Collect body with size limit
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    let bodyTooLarge = false;
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > MAX_MCP_BODY_BYTES) {
-        bodyTooLarge = true;
-        req.destroy();
-      }
-      if (!bodyTooLarge) {
-        chunks.push(chunk);
-      }
+    httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+      const masked = HTTP_TOKEN.slice(0, 4) + "…" + HTTP_TOKEN.slice(-4);
+      process.stderr.write(
+        `ChatLink HTTP server → http://127.0.0.1:${HTTP_PORT}/mcp\n` +
+        `Health → http://127.0.0.1:${HTTP_PORT}/health\n` +
+        `Bridge port 27182 — waiting for Chrome/Edge extension.\n` +
+        `Token: ${masked}  (config: ${getConfigPath()})\n` +
+        `  Run 'node dist/index.js --token' to print the full token.\n` +
+        `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
+      );
     });
+    return;
+  }
 
-    req.on("end", async () => {
-      if (bodyTooLarge) {
-        res.writeHead(413, { "Content-Type": "text/plain" });
-        res.end("Request body too large. Maximum size is 1 MB.");
-        return;
-      }
-
-      let parsedBody: unknown;
-      if (chunks.length > 0) {
-        try {
-          parsedBody = JSON.parse(Buffer.concat(chunks).toString());
-        } catch (err) {
-          process.stderr.write(`Invalid MCP HTTP JSON body: ${String(err)}\n`);
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Invalid JSON body");
-          return;
-        }
-      }
-      await transport.handleRequest(req, res, parsedBody);
-    });
-  });
-
-  httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
-    const masked = HTTP_TOKEN.slice(0, 4) + "…" + HTTP_TOKEN.slice(-4);
-    process.stderr.write(
-      `ChatLink HTTP server → http://127.0.0.1:${HTTP_PORT}/mcp\n` +
-      `Bridge port 27182 — waiting for Chrome/Edge extension.\n` +
-      `Token: ${masked}  (config: ${getConfigPath()})\n` +
-      `  Run 'node dist/index.js --token' to print the full token.\n` +
-      `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
-    );
-  });
-} else {
   // ── stdio mode (default): Claude Code ──────────────────────────────────
-  // Also serves HTTP on 27183 so other agents (OpenCode) can connect simultaneously
-  const stdioServer = new McpServer({ name: "chatlink", version: "0.5.0" });
+  // Also serves HTTP on 27183 so other agents (OpenCode) can connect simultaneously.
+  const stdioServer = new McpServer({ name: "chatlink", version: SERVER_VERSION });
   registerTools(stdioServer);
   const sharedTransport = new StdioServerTransport();
   await stdioServer.connect(sharedTransport);
 
-  // Lightweight HTTP sidecar for OpenCode et al.
-  // Each MCP session gets its own transport+server — one bridge, many clients.
-  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
-
-  const sidecar = createHttpServer(async (req, res) => {
-    if (req.url !== "/mcp" && !req.url?.startsWith("/mcp")) { res.writeHead(404).end(); return; }
-    const auth = validateBearerToken(req);
-    if (!auth.valid) { res.writeHead(401).end(auth.reason); return; }
-
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-    // Collect body
-    const chunks: Buffer[] = []; let size = 0;
-    req.on("data", (c: Buffer) => { size += c.length; if (size > MAX_MCP_BODY_BYTES) req.destroy(); else chunks.push(c); });
-    req.on("end", async () => {
-      if (size > MAX_MCP_BODY_BYTES) { res.writeHead(413).end(); return; }
-
-      // Parse body — must be a JSON object, not raw Buffer/string (SDK expects parsed JSON)
-      let parsedBody: Record<string, unknown> | undefined;
-      if (chunks.length > 0) {
-        try { parsedBody = JSON.parse(Buffer.concat(chunks).toString()); } catch { res.writeHead(400).end("Invalid JSON"); return; }
-      }
-
-      const isInitialize = parsedBody?.method === "initialize";
-
-      if (isInitialize) {
-        // New session: create fresh transport + server
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-        });
-        const server = new McpServer({ name: "chatlink", version: "0.5.0" });
-        registerTools(server);
-        await server.connect(transport);
-
-        // Capture the session ID from the response header (set by transport during initialize)
-        const origSet = res.setHeader.bind(res);
-        let capturedSessionId: string | undefined;
-        res.setHeader = (name: string, value: any) => {
-          if (name.toLowerCase() === "mcp-session-id") {
-            capturedSessionId = String(value);
-            sessions.set(capturedSessionId, { transport, server });
-          }
-          return origSet(name, value);
-        };
-
-        await transport.handleRequest(req, res, parsedBody);
-      } else if (sessionId && sessions.has(sessionId)) {
-        // Route to existing session
-        const session = sessions.get(sessionId)!;
-        await session.transport.handleRequest(req, res, parsedBody);
-      } else {
-        // No valid session — client must initialize first
-        res.writeHead(400).end("Missing or invalid Mcp-Session-Id. Initialize first.");
-      }
-    });
+  httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
+    process.stderr.write(
+      `ChatLink stdio + HTTP → 127.0.0.1:${HTTP_PORT}/mcp (bridge:27182)\n` +
+      `Health → http://127.0.0.1:${HTTP_PORT}/health\n` +
+      `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
+    );
   });
-  sidecar.listen(HTTP_PORT, "127.0.0.1");
-  process.stderr.write(
-    `ChatLink stdio + HTTP → 127.0.0.1:${HTTP_PORT}/mcp (bridge:27182)\n` +
-    `\nLike this tool? Buy me a coffee: ${COFFEE_URL}\n`
-  );
-  }
 }
 
 void main().catch(err => { process.stderr.write("Fatal: " + (err?.message||err) + "\n"); void shutdown("main failed", 1); });
